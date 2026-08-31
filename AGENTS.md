@@ -36,7 +36,7 @@ FocusNavigationService  ── 全部状态机都在这里（~1700 行，本项�
 
 **数据流要点**：
 - 光标位置是唯一的"真相"，存为屏幕坐标（不是某个 `AccessibilityNodeInfo`）。
-- 节点树快照 `candidates` 现在**唯一**用途是：贴边滚动 / 长按翻页时，优先用节点滚动（`performAction(ACTION_SCROLL_FORWARD)` 等），比手势稳；节点不可用再用手势兜底。
+- 节点树快照 `candidates` 现在**唯一**用途是：0+方向键拖拽 / 长按翻页时，优先用节点滚动（`performAction(ACTION_SCROLL_FORWARD)` 等），比手势稳；节点不可用再用手势兜底。
 - 窗口/根节点获取有坑：Dialog/PopupWindow 是独立 Window，`getRootInActiveWindow()` 拿不到，所以 `getFocusableRoot` 优先 isFocused 窗口、否则最上层窗口；前台包名以 `getWindows()` 的 Z 序最上层 APPLICATION 窗口为准。
 
 ## 3. 源码结构
@@ -68,7 +68,7 @@ FocusNavigationService  ── 全部状态机都在这里（~1700 行，本项�
 | **0 键 + 方向键同时按住** | 从光标位置朝该方向**滑动**（拖拽）。0 是纯修饰键：自身不点击、不长按、抬起不补动作，与确认键零冲突。松开任一键停止；松 0 而方向键仍按着 → 恢复移动光标 |
 | 数字键 1~9 | 九宫格跳转：光标直接送到该格几何中心，不吸附控件（可预测性优先） |
 | 长按 2/8/4/6 | 翻页连发（间隔 240→105ms 递减），优先节点滚动，失败用手势 |
-| 光标顶到屏幕边缘继续按 | 改为滚动页面（节流 300ms，手势时长必须小于间隔） |
+| 光标顶到屏幕边缘继续按 | 光标 clamp 住停住，**不再触发滚动**。滚动只由 0+方向键拖拽触发 |
 | 返回键 | `GLOBAL_ACTION_BACK` |
 | 本 App 自己的界面 / 输入框聚焦 | 放行按键、隐藏光标 |
 
@@ -117,7 +117,7 @@ adb logcat | findstr FocusNavigationService                # 实时日志（Powe
 | `WATCHDOG_CHATTY_MS` / `_SILENT_MS` | 600 / 10000 | 看门狗两档 |
 | `DRAG_SWIPE_RATIO` | 0.42 | 0+方向键单次滑动距离（占屏幕比例） |
 | `DRAG_REPEAT_START_MS` / `_MIN_MS` | 520 / 260 | 拖拽连滑间隔 |
-| `EDGE_THRESHOLD` / `EDGE_SCROLL_INTERVAL_MS` | 24 / 300 | 贴边滚动触发与节流 |
+| （已移除）`EDGE_*` | — | 光标不再触发贴边滚动，相关常量与字段已删 |
 
 ## 8. 遗留死代码（改代码时别碰、别信）
 

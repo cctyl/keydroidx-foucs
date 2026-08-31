@@ -95,11 +95,6 @@ public class FocusNavigationService extends AccessibilityService {
      * 判定为 ROM 重复投递（过滤 + 兜底各一次），丢弃。人手连按必然夹着一次 UP。
      */
     private static final long DIR_DOWN_DEDUP_MS = 40;
-    /**
-     * 贴边滚动的节流：光标顶到边缘后继续按就改为滚动页面，
-     * 但滚动是几百毫秒的手势，连发时每 tick 发一次会被系统判成无效手势。
-     */
-    private static final long EDGE_SCROLL_INTERVAL_MS = 300;
     /** 长按翻页的首次连发间隔 */
     private static final long PAGE_REPEAT_START_MS = 240;
     /** 连发间隔下限：再快手势就会叠在一起，系统会把后一个判为无效 */
@@ -151,14 +146,8 @@ public class FocusNavigationService extends AccessibilityService {
      * 让“按住 3 秒以上”也不断流。正常松手都由 ACTION_UP 处理，这里只防 UP 丢失。
      */
     private static final long WATCHDOG_SILENT_MS = 10000;
-    /** 光标进入边缘多少像素内、还继续往外按，就改为滚动页面 */
-    private static final int EDGE_THRESHOLD = 24;
-
     /** 整页翻的手势距离占屏幕比例 */
     private static final float PAGE_SWIPE_RATIO = 0.62f;
-    /** 方向键顶到边缘时的手势距离占屏幕比例，比整页翻温和 */
-    private static final float EDGE_SWIPE_RATIO = 0.40f;
-
     /**
      * 拖拽（0+方向键）的速度曲线，与方向键移动光标同款：按住时长决定距离与间隔，
      * 到 {@link #DRAG_ACCEL_DURATION_MS} 后恒定不再变。
@@ -188,7 +177,7 @@ public class FocusNavigationService extends AccessibilityService {
     /**
      * 当前窗口里可点击控件的快照。
      *
-     * 只为“找滚动容器”服务（贴边滚动 / 2/8/4/6 翻页时优先用节点滚动，比手势稳）。
+     * 只为“找滚动容器”服务（0+方向键拖拽 / 2/8/4/6 翻页时优先用节点滚动，比手势稳）。
      * 不再参与任何“锁定 / 高亮 / 点击”判定——点击一律用光标坐标。
      */
     private final List<FocusNavigator.Node> candidates = new ArrayList<>();
@@ -230,8 +219,6 @@ public class FocusNavigationService extends AccessibilityService {
     private FocusNavigator.Direction heldDirection;
     /** 0 键（滑动修饰键）是否处于按下状态 */
     private boolean zeroDown;
-    /** 上一次贴边滚动的时刻，用于节流 */
-    private long lastEdgeScrollTime;
     /** 上一次真正遍历过节点树的时刻 */
     private long lastCandidateScan;
 
@@ -577,37 +564,8 @@ public class FocusNavigationService extends AccessibilityService {
         int minY = 1;
         int maxY = screenRect.height() - 1;
 
-        // 已经贴边还继续往外按：不再移动鼠标，改为滚动内容
-        boolean atEdge = false;
-        switch (dir) {
-            case UP:
-                atEdge = cursorY <= minY + EDGE_THRESHOLD;
-                break;
-            case DOWN:
-                atEdge = cursorY >= maxY - EDGE_THRESHOLD;
-                break;
-            case LEFT:
-                atEdge = cursorX <= minX + EDGE_THRESHOLD;
-                break;
-            case RIGHT:
-                atEdge = cursorX >= maxX - EDGE_THRESHOLD;
-                break;
-            default:
-                break;
-        }
-        if (atEdge) {
-            // 必须节流：滚动是一次几百毫秒的手势，连发时每 tick 发一次，
-            // 上一次还没演完下一次就来了，系统会把后一次判成无效手势
-            // ——表现正是“顶到边缘后只滚一下就不动了”。
-            long now = SystemClock.uptimeMillis();
-            if (now - lastEdgeScrollTime < EDGE_SCROLL_INTERVAL_MS) return;
-            lastEdgeScrollTime = now;
-            // 借翻页连发的标记：滚动期间跳过节点重收集，松手时再统一收一次
-            pageRepeating = true;
-            pageScroll(dir, EDGE_SWIPE_RATIO, EDGE_SCROLL_INTERVAL_MS);
-            return;
-        }
-
+        // 光标只负责移动，不触发滚动：顶到边缘就 clamp 住停在那。
+        // 滚动只由 0+方向键（拖拽）触发，与光标解耦。
         int step = cursorStep();
         int nx = cursorX;
         int ny = cursorY;
@@ -1364,12 +1322,8 @@ public class FocusNavigationService extends AccessibilityService {
             // 连发期间跳过了整树遍历，停下后补一次，让候选与停下来后的界面对上
             scheduleRefresh(0);
         }
-        // 贴边滚动借用了翻页连发的标记，同样在这里收尾
-        if (pageRepeating) {
-            pageRepeating = false;
-            pageRepeatCount = 0;
-            scheduleRefresh(0);
-        }
+        // 注：pageRepeating 由数字键长按翻页路径自己用 stopPageReset 管理，
+        // 方向键释放不再触碰它（原来为贴边滚动服务，已移除）。
     }
 
     // ------------------------------------------------- 0 键 + 方向键 = 拖拽滑动
