@@ -35,3 +35,4 @@ Thumbs.db
 # Feedback private keys (CRITICAL SECURITY)
 feedback_priv.key
 *.priv.key
+bug清单（不要读取）.txt

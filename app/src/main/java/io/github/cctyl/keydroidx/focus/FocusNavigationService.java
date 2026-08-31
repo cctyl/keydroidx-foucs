@@ -159,16 +159,27 @@ public class FocusNavigationService extends AccessibilityService {
     /** 方向键顶到边缘时的手势距离占屏幕比例，比整页翻温和 */
     private static final float EDGE_SWIPE_RATIO = 0.40f;
 
-    /** 方向键 + 确认键：单次滑动的距离占屏幕比例 */
-    private static final float DRAG_SWIPE_RATIO = 0.42f;
-    /** 单次滑动的最短距离占屏幕短边比例，太短系统不认 */
-    private static final float DRAG_SWIPE_MIN_RATIO = 0.14f;
-    /** 按住不放时两次滑动的初始间隔 */
-    private static final long DRAG_REPEAT_START_MS = 520;
-    /** 连滑的最快间隔：必须大于手势时长，否则上一次没演完下一次就来了 */
-    private static final long DRAG_REPEAT_MIN_MS = 260;
-    /** 每滑一次间隔减少多少 */
-    private static final long DRAG_REPEAT_DECAY_MS = 40;
+    /**
+     * 拖拽（0+方向键）的速度曲线，与方向键移动光标同款：按住时长决定距离与间隔，
+     * 到 {@link #DRAG_ACCEL_DURATION_MS} 后恒定不再变。
+     * <pre>
+     *   按住时长  0 ──── DRAG_ACCEL_DURATION_MS ────▶ ∞
+     *   单次距离  0.08 ────── 线性增大 ──────▶ 0.30   恒定
+     *   间隔      420ms ──── 线性减小 ────▶ 220ms     恒定
+     * </pre>
+     * 轻点只触发首段小步滑动（按一下滚一点），按住则持续滚、越滚越快直到稳速。
+     */
+    private static final float DRAG_RATIO_START = 0.08f;
+    /** 加速结束后的恒定滑动比例，比旧的 0.42 温和 */
+    private static final float DRAG_RATIO_FINAL = 0.30f;
+    /** 加速时长：到点后距离与间隔都恒定，不再增大 */
+    private static final long DRAG_ACCEL_DURATION_MS = 1000;
+    /** 连滑起步间隔（手势时长必须短于此值，否则上一次没演完下一次被判无效） */
+    private static final long DRAG_INTERVAL_START_MS = 420;
+    /** 连滑恒定后的最快间隔；必须 &gt; {@link #SWIPE_MAX_DURATION_MS}(280) */
+    private static final long DRAG_INTERVAL_FINAL_MS = 220;
+    /** 单次滑动的最短距离占屏幕短边比例，太短系统不认（拖拽起步小步也要保证过得去） */
+    private static final float DRAG_SWIPE_MIN_RATIO = 0.06f;
 
     private WindowManager windowManager;
     private CursorOverlay overlay;
@@ -226,10 +237,12 @@ public class FocusNavigationService extends AccessibilityService {
 
     // ------------------------------------------------- 方向键 + 确认键 = 拖拽滑动
     private Runnable dragRepeatRunnable;
-    /** 本次拖拽已滑动的次数，用于计算递减的间隔 */
+    /** 本次拖拽已滑动的次数，仅用于日志 */
     private int dragRepeatCount;
     /** 正在拖拽的方向；null 表示没在拖拽 */
     private FocusNavigator.Direction dragDirection;
+    /** 本次拖拽开始的时刻，用于计算加速进度 */
+    private long dragStart;
 
     private boolean editMode;
     private String currentPackage;
@@ -1375,6 +1388,7 @@ public class FocusNavigationService extends AccessibilityService {
         stopDrag();
         dragDirection = dir;
         dragRepeatCount = 0;
+        dragStart = SystemClock.uptimeMillis();
         Log.d(TAG, "drag start dir=" + dir + " at (" + cursorX + "," + cursorY + ")");
 
         final Runnable[] holder = new Runnable[1];
@@ -1393,20 +1407,26 @@ public class FocusNavigationService extends AccessibilityService {
                     stopDrag();
                     return;
                 }
-                long interval = Math.max(DRAG_REPEAT_MIN_MS,
-                        DRAG_REPEAT_START_MS - dragRepeatCount * DRAG_REPEAT_DECAY_MS);
-                dragRepeatCount++;
+                // 加速进度 0~1，到 1 后恒定——与 startMoveRepeat 同一约定
+                float t = (float) (now - dragStart) / (float) DRAG_ACCEL_DURATION_MS;
+                if (t < 0f) t = 0f;
+                if (t > 1f) t = 1f;
+                float ratio = DRAG_RATIO_START + (DRAG_RATIO_FINAL - DRAG_RATIO_START) * t;
+                long interval = Math.round(DRAG_INTERVAL_START_MS
+                        + (DRAG_INTERVAL_FINAL_MS - DRAG_INTERVAL_START_MS) * t);
                 // 手势时长必须短于间隔，否则上一次没演完下一次就来了，会被判无效
                 long duration = Math.max(80, Math.min(SWIPE_MAX_DURATION_MS, interval - 60));
-                swipeFromCursor(dir, DRAG_SWIPE_RATIO, duration);
-                Log.v(TAG, "drag #" + dragRepeatCount + " interval=" + interval);
+                dragRepeatCount++;
+                swipeFromCursor(dir, ratio, duration);
+                Log.v(TAG, "drag #" + dragRepeatCount + " t=" + t
+                        + " ratio=" + ratio + " interval=" + interval);
                 handler.postDelayed(holder[0], interval);
             }
         };
         dragRepeatRunnable = holder[0];
-        // 立刻来一次，反馈即时
-        swipeFromCursor(dir, DRAG_SWIPE_RATIO, SWIPE_MAX_DURATION_MS);
-        handler.postDelayed(holder[0], DRAG_REPEAT_START_MS);
+        // 立刻来一次起步小步滑动，反馈即时（轻点就只滚这一点）
+        swipeFromCursor(dir, DRAG_RATIO_START, SWIPE_MAX_DURATION_MS);
+        handler.postDelayed(holder[0], DRAG_INTERVAL_START_MS);
     }
 
     private void stopDrag() {
@@ -1417,6 +1437,7 @@ public class FocusNavigationService extends AccessibilityService {
         if (dragDirection != null) {
             dragDirection = null;
             dragRepeatCount = 0;
+            dragStart = 0;
             // 滑动之后界面内容变了，补收一次控件（只为滚动服务）
             scheduleRefresh(0);
         }
