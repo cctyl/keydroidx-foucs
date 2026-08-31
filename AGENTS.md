@@ -47,7 +47,8 @@ FocusNavigationService  ── 全部状态机都在这里（本项目的"心脏
   - 拖拽：`startDrag` / `stopDrag` / `swipeFromCursor`；
   - 前台包名：`refreshActivePackage` 以 `getWindows()` Z 序最上层 APPLICATION 窗口为准；
   - 窗口根：`getFocusableRoot` 优先 isFocused 的窗口，否则最上层；
-  - `isOurOwnApp()` / `editMode`：自家界面 / 输入框聚焦时放行按键、隐藏光标。
+  - `isOurOwnApp()` / `isInputMode()`：自家界面放行按键；输入态 = `editMode`（输入框焦点，FOCUSED/CLICKED 事件驱动）∨ `imeShowing`（IME 窗口检测，`TYPE_INPUT_METHOD`），任一命中即隐藏光标 + 放行按键；
+  - `calibrateEditMode`：刷新时用 `findFocus(FOCUS_INPUT)` 单节点校准 editMode（节点级查询，不是整树遍历，不违反连发性能红线）。
 - **`FocusNavigator.java`**：纯算法。旧焦点模型遗留工具类，**改代码时别把它们当成现役逻辑**。
 - **`CursorOverlay.java`**：全屏画布，**只画光标本体**（白圈黑描边 + 四向准星 + 橙点）。不要往里加控件高亮 / 锁定框。
 - **`MainActivity.java`**：配置页（跳系统无障碍设置 + 启用开关 + 应用黑名单入口 + 说明文字）。
@@ -67,7 +68,7 @@ FocusNavigationService  ── 全部状态机都在这里（本项目的"心脏
 | 数字键 1~9 | 九宫格跳转：光标直接送到该格几何中心，不吸附控件，无翻页功能（可预测性优先） |
 | 光标顶到屏幕边缘继续按 | 光标 clamp 住停住，**不再触发滚动**。滚动只由 0+方向键拖拽触发 |
 | 返回键 | `GLOBAL_ACTION_BACK` |
-| 本 App 自己的界面 / 输入框聚焦 | 放行按键、隐藏光标 |
+| 本 App 自己的界面 / 输入态（输入框聚焦或输入法弹出） | 放行按键、隐藏光标 |
 | **黑名单应用内** | 光标完全失效（不显示），方向键/数字键/确认键/星井组合/BACK 等**全部原样放行**给该 App，与服务未拦截时一致；离开黑名单应用光标自动恢复。判断在 `refreshActivePackage()` 之后，用 `isBlacklistedApp()` + `releaseAllKeys()` 清场（连发/拖拽/长按定时器/组合键状态都要清，否则残留定时器会在放行期间继续点） |
 
 **手势方向语义（极易写反，已踩坑）**：`Direction.DOWN` 表示"想看下面的内容"，对应手指**向上**滑（`swipeFromCursor` 拖拽）。若按"手指拖动方向"实现，0+下 会把页面往上拉。
@@ -85,6 +86,10 @@ FocusNavigationService  ── 全部状态机都在这里（本项目的"心脏
 5. **自己污染自己**：悬浮层 invalidate 会发 `TYPE_WINDOW_CONTENT_CHANGED` 且包名是本应用，若用它更新 `currentPackage`，`isOurOwnApp()` 恒为 true，表现"光标亮一下就灭"。包名只认 `getWindows()` 的 Z 序。
 6. **性能红线**：连发期间（光标移动 / 拖拽）不做整树遍历（24ms 一步的节奏下遍历必掉帧）；手势时长必须短于连发间隔，否则上一次没演完、下一次被系统判无效。
 7. **编译环境**：Windows 下必须 `gradlew.bat`，`./gradlew` 会报 `Could not find or load main class GradleWrapperMain`。
+8. **打字途中输入态被误清**（已修，别回退）：输入态一旦误退出，确认键就在旧光标位置派发点击 → 点到输入框外 → 焦点丢失、输入法收起，整个输入流程被打断（"打完字按确认没选中词"）。三条误退出路径与对策：
+   - IME 候选栏/软键盘自己也发 FOCUSED/CLICKED（source 是输入法按钮，不可编辑）→ FOCUSED/CLICKED 判定前必须 `eventFromForegroundApp()` 过滤事件来源（用 `resolveForegroundPackage()` 实时比，不能比 currentPackage——调用点之前它可能已被 IME 包名污染）；
+   - 输入框确认/选词的 CLICKED 事件经常取不到 source → `src == null` 时按"仍在编辑"处理（"没有证据"≠"反证据"）；
+   - `imeShowing`（IME 窗口存在）作为输入态兜底：editMode 被误清时 IME 还弹着就继续放行。误退出比多放行危害大，宁可持续到有明确退出证据（焦点事件/CLICKED 到非编辑控件/calibrateEditMode 校准）。
 
 ## 6. 构建 / 运行 / 调试
 

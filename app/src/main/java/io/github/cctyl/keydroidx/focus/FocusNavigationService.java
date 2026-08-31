@@ -250,6 +250,8 @@ public class FocusNavigationService extends AccessibilityService {
     private long dragStart;
 
     private boolean editMode;
+    /** 输入法窗口是否正在显示（IME 弹着 = 输入态兜底信号，见 isInputMode） */
+    private boolean imeShowing;
     private String currentPackage;
     private long lastMoveTime;
     private long lastRefreshTime;
@@ -533,13 +535,17 @@ public class FocusNavigationService extends AccessibilityService {
      */
     private void refreshCurrentWindow() {
         refreshActivePackage();
-
+        // 用焦点节点校准 editMode：治“焦点已移走，但 FOCUSED 事件拿不到 source”的卡死。
+        // IME 正弹着时不校准——此时输入态明确，任何“看起来没在编辑”的信号都不可采信。
+        if (!imeShowing) {
+            calibrateEditMode();
+        }
         if (!NavigationPrefs.isEnabled(this) || isOurOwnApp() || isBlacklistedApp()) {
             hideOverlay("refresh-hide:" + currentPackage);
             return;
         }
-        if (editMode) {
-            hideOverlay("refresh-editMode");
+        if (isInputMode()) {
+            hideOverlay("refresh-inputMode:" + currentPackage);
             return;
         }
         if (cursorX < 0 || cursorY < 0) {
@@ -734,34 +740,54 @@ public class FocusNavigationService extends AccessibilityService {
 
         int type = event.getEventType();
 
-        // 追踪输入框焦点，进入编辑模式后不再拦截按键
-        if (type == AccessibilityEvent.TYPE_VIEW_FOCUSED) {
-            AccessibilityNodeInfo src = null;
-            try {
-                src = event.getSource();
-            } catch (Exception ignored) {
-            }
-            if (src != null) {
-                boolean editable = src.isEditable() || isEditableClassName(src.getClassName());
-                if (editable != editMode) {
-                    editMode = editable;
-                    if (editMode) hideOverlay("editMode-enter");
+        // 追踪输入框焦点，进入编辑模式后不再拦截按键。
+        //
+        // 两道防误退的闸门。打字途中输入态一旦被误清，按键立刻被服务重新接管，
+        // 光标在旧位置复活——确认键就在屏幕另一边点下去，点到输入框外面，
+        // 焦点丢失、输入法收起，整个输入流程被打断（“打完字按确认没选中词”就是它）。
+        //
+        // 闸门 1：事件必须来自前台 App 的窗口。IME 候选栏 / 软键盘内部也会发
+        //   FOCUSED / CLICKED，其 source 是输入法自己的按钮（不可编辑），
+        //   若照单全收，一进输入法就会被误判“退出了编辑”。
+        // 闸门 2：CLICKED 取不到 source 时按“仍在编辑”处理。输入框确认、
+        //   选词上屏产生的 CLICKED 事件经常取不到 source——
+        //   “没有证据”不能当“反证据”用。
+        if (type == AccessibilityEvent.TYPE_VIEW_FOCUSED
+                || type == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            if (eventFromForegroundApp(event)) {
+                if (type == AccessibilityEvent.TYPE_VIEW_FOCUSED) {
+                    AccessibilityNodeInfo src = null;
+                    try {
+                        src = event.getSource();
+                    } catch (Exception ignored) {
+                    }
+                    if (src != null) {
+                        boolean editable = src.isEditable()
+                                || isEditableClassName(src.getClassName());
+                        if (editable != editMode) {
+                            editMode = editable;
+                            if (editMode) hideOverlay("editMode-enter");
+                        }
+                        src.recycle();
+                    }
+                } else if (editMode) {
+                    // 点了非输入类控件，视为退出编辑模式（仅靠 VIEW_FOCUSED 会卡死在编辑态）
+                    AccessibilityNodeInfo src = null;
+                    try {
+                        src = event.getSource();
+                    } catch (Exception ignored) {
+                    }
+                    boolean stillEditing = true;
+                    if (src != null) {
+                        stillEditing = src.isEditable()
+                                || isEditableClassName(src.getClassName());
+                        src.recycle();
+                    }
+                    if (!stillEditing) {
+                        editMode = false;
+                        scheduleRefresh(REFRESH_DEBOUNCE_MS);
+                    }
                 }
-                src.recycle();
-            }
-        } else if (type == AccessibilityEvent.TYPE_VIEW_CLICKED && editMode) {
-            // 点了非输入类控件，视为退出编辑模式（仅靠 VIEW_FOCUSED 会卡死在编辑态）
-            AccessibilityNodeInfo src = null;
-            try {
-                src = event.getSource();
-            } catch (Exception ignored) {
-            }
-            boolean stillEditing = src != null
-                    && (src.isEditable() || isEditableClassName(src.getClassName()));
-            if (src != null) src.recycle();
-            if (!stillEditing) {
-                editMode = false;
-                scheduleRefresh(REFRESH_DEBOUNCE_MS);
             }
         }
 
@@ -778,8 +804,9 @@ public class FocusNavigationService extends AccessibilityService {
             hideOverlay("blacklist:" + currentPackage);
             return;
         }
-        if (editMode) {
-            hideOverlay("editMode");
+        if (isInputMode()) {
+            // 输入态（输入框焦点 / IME 弹出）：隐藏光标，不等刷新防抖
+            hideOverlay("inputMode:" + (editMode ? "edit" : "ime"));
             return;
         }
 
@@ -841,6 +868,108 @@ public class FocusNavigationService extends AccessibilityService {
         String pkg = resolveForegroundPackage();
         if (pkg != null) {
             currentPackage = pkg;
+        }
+        imeShowing = isImeShowing();
+    }
+
+    /**
+     * 输入法窗口是否正在显示。
+     *
+     * 只读窗口类型，不取节点树，成本可忽略；refreshActivePackage() 每次按键 / 刷新
+     * 都会顺带更新缓存字段 {@link #imeShowing}。
+     *
+     * 为什么它是输入态的兜底信号：无论 App 用什么 UI 框架（自绘、Flutter、游戏内嵌），
+     * 只要真要打字，系统 IME 窗口就会弹出——不依赖任何节点树，也不依赖
+     * FOCUSED 事件能否取到 source，恰好补上 editMode 的两块盲区。
+     */
+    private boolean isImeShowing() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return false;
+        List<AccessibilityWindowInfo> windows;
+        try {
+            windows = getWindows();
+        } catch (Exception e) {
+            return false;
+        }
+        if (windows == null) return false;
+        try {
+            for (int i = windows.size() - 1; i >= 0; i--) {
+                AccessibilityWindowInfo w = windows.get(i);
+                if (w == null) continue;
+                try {
+                    if (w.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                        return true;
+                    }
+                } finally {
+                    w.recycle();
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
+    /**
+     * 当前是否处于“输入态”：输入框持有焦点（editMode）或输入法窗口正在显示。
+     *
+     * 两者是互补关系，任一命中即视为在输入，光标隐藏、按键放行：
+     * - editMode 快（焦点事件驱动），但可能被 IME 事件污染误清、也可能卡死；
+     * - imeShowing 稳（系统级窗口，不依赖节点树），但比焦点事件稍慢。
+     * 即使 editMode 被误清，IME 还弹着就继续放行——误退出比多放行一会儿危害大得多：
+     * 误退出会让确认键在旧光标位置派发点击，直接打断输入流程。
+     */
+    private boolean isInputMode() {
+        return editMode || imeShowing;
+    }
+
+    /**
+     * 事件是否来自前台 App 的窗口（用于过滤 IME / 系统窗口的事件）。
+     *
+     * 必须用 {@link #resolveForegroundPackage()} 实时查，不能比 currentPackage——
+     * 调用点之前的逻辑可能已把 currentPackage 更新成事件自己的包名
+     * （IME 事件的包名就是输入法），用它比较等于没过滤。
+     */
+    private boolean eventFromForegroundApp(AccessibilityEvent event) {
+        CharSequence cs = event.getPackageName();
+        if (cs == null || cs.length() == 0) return false;
+        String fg = resolveForegroundPackage();
+        if (fg == null) fg = currentPackage;
+        return cs.toString().equals(fg);
+    }
+
+    /**
+     * 用焦点节点校准 editMode（治卡死，也顺带治漏进）。
+     *
+     * 场景：焦点从输入框移走时，若 FOCUSED 事件取不到 source，editMode 会卡在 true，
+     * 按键从此全部放行、光标再也不出来。这里在每次刷新时用
+     * {@code findFocus(FOCUS_INPUT)} 直接问窗口“输入焦点在谁身上”——
+     * 它是节点级查询，只碰焦点这一个节点，不是整树遍历，不违反连发性能红线。
+     *
+     * 注意 findFocus 对拿不到节点树的 App 一样会失败，那些场景由
+     * {@link #imeShowing} 兜底，两边互补。
+     */
+    private void calibrateEditMode() {
+        AccessibilityNodeInfo root = null;
+        try {
+            root = getFocusableRoot();
+        } catch (Exception ignored) {
+        }
+        if (root == null) return;
+        AccessibilityNodeInfo focus = null;
+        try {
+            focus = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+        } catch (Exception ignored) {
+        }
+        if (focus == null) {
+            root.recycle();
+            return;
+        }
+        boolean editable = focus.isEditable() || isEditableClassName(focus.getClassName());
+        focus.recycle();
+        root.recycle();
+        if (editable != editMode) {
+            Log.d(TAG, "editMode calibrated " + editMode + " -> " + editable);
+            editMode = editable;
+            if (editMode) hideOverlay("editMode-calibrate");
         }
     }
 
@@ -963,10 +1092,13 @@ public class FocusNavigationService extends AccessibilityService {
             return false;
         }
         refreshActivePackage();
-        // 本 App 自己的界面、输入框获得焦点、黑名单应用：按键全部放行。
+        // 本 App 自己的界面、输入态（输入框焦点 / IME 弹出）、黑名单应用：按键全部放行。
         // 黑名单判断必须放在 refreshActivePackage() 之后——前台刚切到别的应用时，
         // 第一个按键事件就要按新包名放行，不能沿用旧的 currentPackage。
-        if (isOurOwnApp() || editMode || isBlacklistedApp()) {
+        // 输入态用 isInputMode() 而非 editMode：即使 editMode 被意外清掉，
+        // 只要输入法窗口还弹着，按键就必须继续放行——否则选词/确认会被
+        // 服务抢走，在旧光标位置派发点击，打断整个输入流程。
+        if (isOurOwnApp() || isInputMode() || isBlacklistedApp()) {
             releaseAllKeys();
             return false;
         }
