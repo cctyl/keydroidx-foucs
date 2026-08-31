@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.KeydroidxFocus" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="colorPrimary">@color/focus_orange</item>
+        <item name="colorPrimaryDark">@color/focus_orange_dark</item>
+        <item name="colorAccent">@color/focus_orange</item>
+    </style>
+</resources>

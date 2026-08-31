@@ -1,0 +1,37 @@
+# Gradle
+.gradle/
+build/
+*/build/
+
+# Android Studio / IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Local configuration & environment
+local.properties
+keystore.properties
+gradle.properties
+
+# Keystore & credentials (CRITICAL SECURITY)
+*.jks
+*.keystore
+app/test.jks
+sample/test.jks
+# 例外：test.jks 是脚手架自带的测试签名密钥（密码在 git-ignored 的
+# gradle.properties 里），app/build.gradle 的 signingConfig 无条件引用它，
+# 不提交的话新环境 assembleDebug 直接失败。
+!test.jks
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Feedback private keys (CRITICAL SECURITY)
+feedback_priv.key
+*.priv.key

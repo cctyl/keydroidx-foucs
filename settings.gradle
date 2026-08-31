@@ -1,0 +1,23 @@
+pluginManagement {
+    repositories {
+        maven { url = "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/" }
+        maven { url = "https://maven.aliyun.com/repository/public/" }
+        gradlePluginPortal()
+        google()
+        mavenCentral()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        maven { url = "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/" }
+        maven { url = "https://maven.aliyun.com/repository/public/" }
+        google()
+        mavenCentral()
+        maven { url = "https://jitpack.io" }
+    }
+}
+
+rootProject.name = "keydroidx-focus"
+include ':app'

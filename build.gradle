@@ -1,0 +1,14 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+plugins {
+    id 'com.android.application' version '8.5.1' apply false
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}
+
+ext {
+    COMPILE_SDK = 34
+    MIN_SDK = 27   // TYPE_ACCESSIBILITY_OVERLAY 需要 API 27+
+    TARGET_SDK = 34
+}
