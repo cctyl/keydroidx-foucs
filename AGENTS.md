@@ -18,25 +18,22 @@
 物理按键(KeyEvent)
       │
       ▼
-FocusNavigationService  ── 全部状态机都在这里（~1700 行，本项目的"心脏"）
+FocusNavigationService  ── 全部状态机都在这里（本项目的"心脏"）
   │  onKeyEvent 分发：
   │    方向键  → 移动光标（自驱动连发 + 加速）
   │    确认键  → dispatchGesture 在光标坐标点击/长按
   │    0+方向  → 从光标位置滑屏（拖拽）
-  │    数字键  → 九宫格直送光标
+  │    数字键  → 九宫格直送光标（无翻页功能）
   │    BACK    → GLOBAL_ACTION_BACK
   │
   ├─ CursorOverlay  ─── 全屏画布，只画光标本体（不画控件高亮/锁定框）
   │
   └─ FocusNavigator ── 纯算法工具类（无服务状态）
-        collectCandidates()     现役：收集节点，仅用于"找光标附近可滚动容器"
-        findScrollableAncestor()现役：向上找可滚动祖先
-        findNextFocus/findInitialFocus/findNearestToPoint  ← 旧焦点模型遗留，已无调用方
+        findNextFocus/findInitialFocus/findNearestToPoint/findScrollableAncestor/collectCandidates  ← 旧焦点模型遗留
 ```
 
 **数据流要点**：
 - 光标位置是唯一的"真相"，存为屏幕坐标（不是某个 `AccessibilityNodeInfo`）。
-- 节点树快照 `candidates` 现在**唯一**用途是：0+方向键拖拽 / 长按翻页时，优先用节点滚动（`performAction(ACTION_SCROLL_FORWARD)` 等），比手势稳；节点不可用再用手势兜底。
 - 窗口/根节点获取有坑：Dialog/PopupWindow 是独立 Window，`getRootInActiveWindow()` 拿不到，所以 `getFocusableRoot` 优先 isFocused 窗口、否则最上层窗口；前台包名以 `getWindows()` 的 Z 序最上层 APPLICATION 窗口为准。
 
 ## 3. 源码结构
@@ -48,11 +45,10 @@ FocusNavigationService  ── 全部状态机都在这里（~1700 行，本项�
   - `onKeyEvent`：按键分发 → `handleDirectionKey` / `handleNumberKey` / `handleZeroKey` / `handleSelectKey` / BACK；
   - 方向键连发：`startMoveRepeat` + `moveReleaseRunnable` + `moveKeyUpPending`；
   - 拖拽：`startDrag` / `stopDrag` / `swipeFromCursor`；
-  - 滚动：`pageScroll`（节点滚动 → 手势兜底）、`findScrollableNearCursor`、`candidatesUsable`（抽查前 3 个节点 `refresh()`）；
   - 前台包名：`refreshActivePackage` 以 `getWindows()` Z 序最上层 APPLICATION 窗口为准；
   - 窗口根：`getFocusableRoot` 优先 isFocused 的窗口，否则最上层；
   - `isOurOwnApp()` / `editMode`：自家界面 / 输入框聚焦时放行按键、隐藏光标。
-- **`FocusNavigator.java`**：纯算法。`collectCandidates`（叶子优先剪枝 + 屏幕内过滤 + 面积上限 + 交互判定）和 `findScrollableAncestor` 是现役；`findNextFocus` / `findInitialFocus` / `findNearestToPoint` 是旧模型遗留，**改代码时别把它们当成现役逻辑**。
+- **`FocusNavigator.java`**：纯算法。旧焦点模型遗留工具类，**改代码时别把它们当成现役逻辑**。
 - **`CursorOverlay.java`**：全屏画布，**只画光标本体**（白圈黑描边 + 四向准星 + 橙点）。不要往里加控件高亮 / 锁定框。
 - **`MainActivity.java`**：配置页（跳系统无障碍设置 + 启用开关 + 说明文字）。
 - **`NavigationPrefs.java`**：`SharedPreferences` 的 `enabled` 开关，关着时服务在系统设置里开着也不拦截任何按键。
@@ -66,13 +62,12 @@ FocusNavigationService  ── 全部状态机都在这里（~1700 行，本项�
 | 确认键短按 | 在光标坐标点击（手势） |
 | 确认键长按 ≥500ms | 在光标坐标长按（700ms 手势） |
 | **0 键 + 方向键同时按住** | 从光标位置朝该方向**滑动**（拖拽）。0 是纯修饰键：自身不点击、不长按、抬起不补动作，与确认键零冲突。松开任一键停止；松 0 而方向键仍按着 → 恢复移动光标 |
-| 数字键 1~9 | 九宫格跳转：光标直接送到该格几何中心，不吸附控件（可预测性优先） |
-| 长按 2/8/4/6 | 翻页连发（间隔 240→105ms 递减），优先节点滚动，失败用手势 |
+| 数字键 1~9 | 九宫格跳转：光标直接送到该格几何中心，不吸附控件，无翻页功能（可预测性优先） |
 | 光标顶到屏幕边缘继续按 | 光标 clamp 住停住，**不再触发滚动**。滚动只由 0+方向键拖拽触发 |
 | 返回键 | `GLOBAL_ACTION_BACK` |
 | 本 App 自己的界面 / 输入框聚焦 | 放行按键、隐藏光标 |
 
-**手势方向语义（极易写反，已踩坑）**：`Direction.DOWN` 表示"想看下面的内容"，对应手指**向上**滑。`swipePage`（翻页）与 `swipeFromCursor`（0+方向键拖拽）必须保持同一约定。若按"手指拖动方向"实现，0+下 会把页面往上拉。
+**手势方向语义（极易写反，已踩坑）**：`Direction.DOWN` 表示"想看下面的内容"，对应手指**向上**滑（`swipeFromCursor` 拖拽）。若按"手指拖动方向"实现，0+下 会把页面往上拉。
 
 ## 5. 必须知道的坑
 
@@ -85,7 +80,7 @@ FocusNavigationService  ── 全部状态机都在这里（~1700 行，本项�
 3. **"一次点按走两步"竞态**：DOWN 立即走第 1 步，连发定时器排在 260ms 处；UP 后的松手确认在 UP+220ms 处。点按时长落在两者之间时，定时器会在"已抬起但还没确认"的窗口里多走一步。修复是 `moveKeyUpPending` 标志：UP 立刻置位，连发 tick 见到它只重排自己（50ms）、绝不移动；任何 DOWN 清除它。另有 `DIR_DOWN_DEDUP_MS`(40ms) 去重：同键无 UP 的重复 DOWN 判为 ROM 重复投递。
 4. **看门狗分档**：持续收到信号（repeat / DOWN-UP 对）的"健谈"设备用 600ms；沉默设备（只有第一个 DOWN）用 10s 兜底。统一用短看门狗会导致"按住超过 3 秒断流"。
 5. **自己污染自己**：悬浮层 invalidate 会发 `TYPE_WINDOW_CONTENT_CHANGED` 且包名是本应用，若用它更新 `currentPackage`，`isOurOwnApp()` 恒为 true，表现"光标亮一下就灭"。包名只认 `getWindows()` 的 Z 序。
-6. **性能红线**：连发期间（光标移动 / 翻页 / 拖拽）不做整树遍历（24ms 一步的节奏下遍历必掉帧），松手后 `scheduleRefresh(0)` 补一次；手势时长必须短于连发间隔，否则上一次没演完、下一次被系统判无效。
+6. **性能红线**：连发期间（光标移动 / 拖拽）不做整树遍历（24ms 一步的节奏下遍历必掉帧）；手势时长必须短于连发间隔，否则上一次没演完、下一次被系统判无效。
 7. **编译环境**：Windows 下必须 `gradlew.bat`，`./gradlew` 会报 `Could not find or load main class GradleWrapperMain`。
 
 ## 6. 构建 / 运行 / 调试
@@ -127,5 +122,5 @@ adb logcat | findstr FocusNavigationService                # 实时日志（Powe
 
 - Flutter / 游戏 / 自绘 UI 无节点树：坐标点击与手势不受影响（这正是不锁控件的好处），但滚动会退化为手势滑动；
 - 有些 App 屏蔽无障碍，无法绕过；
-- 纯几何九宫格 / 翻页不识别语义，后续可考虑结合控件类型与文本；
+- 纯几何九宫格不识别语义，后续可考虑结合控件类型与文本；
 - 方向键 + 0 键的组合在"连滑超快"场景下手势时长与间隔的配比还可再调。

@@ -35,7 +35,7 @@ import java.util.List;
  *
  * 1. 方向键移动鼠标（短按走一步；按住则连发，1 秒内加速到恒速后不再变）；
  * 2. 数字键 1~9 = 屏幕九宫格，短按把鼠标送到该格中心；
- * 3. 长按 2/8/4/6 翻页；返回键 = 全局返回；
+ * 3. 返回键 = 全局返回；
  * 4. 确认键 = 在光标坐标处点击；长按确认键 = 在光标坐标处长按；
  * 5. <b>0 键 + 方向键同时按住</b> = 从光标当前位置朝该方向滑动（拖拽）。
  *    0 键是纯修饰键，自身不产生任何动作，所以与确认键的“点击”语义零冲突。
@@ -95,32 +95,12 @@ public class FocusNavigationService extends AccessibilityService {
      * 判定为 ROM 重复投递（过滤 + 兜底各一次），丢弃。人手连按必然夹着一次 UP。
      */
     private static final long DIR_DOWN_DEDUP_MS = 40;
-    /** 长按翻页的首次连发间隔 */
-    private static final long PAGE_REPEAT_START_MS = 240;
-    /** 连发间隔下限：再快手势就会叠在一起，系统会把后一个判为无效 */
-    private static final long PAGE_REPEAT_MIN_MS = 105;
-    /** 每连发一次间隔减少多少，形成“越按越快”的手感 */
-    private static final long PAGE_REPEAT_DECAY_MS = 22;
-    /** 滑动手势时长上限；连发时会被压缩，保证上一次滑完才发下一次 */
-    private static final long SWIPE_MAX_DURATION_MS = 280;
     /**
      * 抬键后这么短的时间内又按下同一个键，视为<b>同一次按压</b>（按键 repeat），
      * 而不是一次新的短按。必须大于设备的按键重复间隔（常见 30~100ms），
-     * 又不能太大，否则短按九宫格会有明显延迟。
+     * 又不能太大，否则短按会有明显延迟。
      */
     private static final long KEY_STILL_HELD_MS = 220;
-    /**
-     * 连发看门狗：这么久没收到任何按键信号就强制停止，防止 ACTION_UP 丢失后无限滚动。
-     *
-     * 必须足够长。很多功能机按住数字键时<b>根本不发送按键重复事件</b>，
-     * 只有按下时一个 DOWN、松手时一个 UP。此时“最后一次信号时间”永远停在按下的那一刻，
-     * 看门狗如果只有几百毫秒，就会在第 2 次连发时误判“按键已丢失”而停掉——
-     * 表现正是“长按只滚动一下”。
-     * 正常松手由 ACTION_UP 处理，这里只作为 UP 丢失时的兜底，给 3 秒足够安全。
-     */
-    private static final long PAGE_WATCHDOG_MS = 3000;
-    /** 滚动后等待列表稳定再重新收集 */
-    private static final long SCROLL_SETTLE_MS = 260;
     /** 进入新页面后等待窗口就绪 */
     private static final long WINDOW_READY_DELAY_MS = 250;
     /** 两次方向键按下间隔超过这个值，就认为是一次新的点按（连发计数清零） */
@@ -146,8 +126,6 @@ public class FocusNavigationService extends AccessibilityService {
      * 让“按住 3 秒以上”也不断流。正常松手都由 ACTION_UP 处理，这里只防 UP 丢失。
      */
     private static final long WATCHDOG_SILENT_MS = 10000;
-    /** 整页翻的手势距离占屏幕比例 */
-    private static final float PAGE_SWIPE_RATIO = 0.62f;
     /**
      * 拖拽（0+方向键）的速度曲线，与方向键移动光标同款：按住时长决定距离与间隔，
      * 到 {@link #DRAG_ACCEL_DURATION_MS} 后恒定不再变。
@@ -184,14 +162,6 @@ public class FocusNavigationService extends AccessibilityService {
     private CursorOverlay overlay;
     private WindowManager.LayoutParams overlayParams;
 
-    /**
-     * 当前窗口里可点击控件的快照。
-     *
-     * 只为“找滚动容器”服务（0+方向键拖拽 / 2/8/4/6 翻页时优先用节点滚动，比手势稳）。
-     * 不再参与任何“锁定 / 高亮 / 点击”判定——点击一律用光标坐标。
-     */
-    private final List<FocusNavigator.Node> candidates = new ArrayList<>();
-
     private int cursorX = -1;
     private int cursorY = -1;
     /** 连续同方向移动的步数，用于加速 */
@@ -225,6 +195,10 @@ public class FocusNavigationService extends AccessibilityService {
     /** 上一次方向键 DOWN 的键码与时刻，用于识别 ROM 的重复投递 */
     private int lastDirDownCode = -1;
     private long lastDirDownTime;
+    /** 上一次收到 ACTION_UP 的键码与时刻，用于在没有 repeat 机制的设备上把频繁 DOWN/UP 识别为同一次长按 */
+    private int lastKeyUpCode = -1;
+    private long lastKeyUpTime;
+
     /** 当前按住的方向键；null 表示没有方向键被按住 */
     private FocusNavigator.Direction heldDirection;
     /** 0 键（滑动修饰键）是否处于按下状态 */
@@ -251,22 +225,6 @@ public class FocusNavigationService extends AccessibilityService {
 
     private Runnable longPressRunnable;
     private boolean longPressFired;
-
-    /** 数字键长按翻页的连发任务 */
-    private Runnable pageRepeatRunnable;
-    private boolean pageLongFired;
-    /** 是否已进入连发（用于连发期间跳过节点重收集） */
-    private boolean pageRepeating;
-    /** 本次长按已连发的次数，用于计算递减的间隔 */
-    private int pageRepeatCount;
-    private int numberKeyDown = -1;
-    /** 最近一次收到该键 DOWN/UP 信号的时刻，供看门狗判断按键是否还“活着” */
-    private long numberKeyLastSignal;
-    /** 上一次抬键的键码与时刻，用于判定“是不是同一次按压” */
-    private int lastKeyUpCode = -1;
-    private long lastKeyUpTime;
-    /** 待判定的短按：抬键后延迟确认，期间若又按下则取消 */
-    private int pendingTapKey = -1;
 
     private final Runnable refreshRunnable = new Runnable() {
         @Override
@@ -310,7 +268,7 @@ public class FocusNavigationService extends AccessibilityService {
         // 关键：一旦调用 setServiceInfo()，系统就以这个对象为准，XML 里声明的属性
         // 不会被自动合并进来。实测该 ROM 上报 capabilities=41（只有 取窗口内容/放大镜/截图），
         // 缺了 4=CAN_REQUEST_FILTER_KEY_EVENTS 与 16=CAN_PERFORM_GESTURES，
-        // 于是 onKeyEvent 从不被回调、dispatchGesture 恒失败——表现为“翻页只动一下”。
+        // 于是 onKeyEvent 从不被回调、dispatchGesture 恒失败——表现为“按键无响应/手势无效”。
         // 所以这里必须逐项显式声明，不能依赖 XML。
         // 这几个字段在部分 compileSdk 下不可见，用反射设置，编译与运行都稳。
         dumpCapabilityFields(info);
@@ -524,36 +482,8 @@ public class FocusNavigationService extends AccessibilityService {
         });
     }
 
-    /** 点到矩形的距离：点在矩形内为 0 */
-    private static int distanceToRect(Rect r, int x, int y) {
-        int dx = Math.max(0, Math.max(r.left - x, x - r.right));
-        int dy = Math.max(0, Math.max(r.top - y, y - r.bottom));
-        return (int) Math.sqrt((double) dx * dx + (double) dy * dy);
-    }
-
-    // ---------------------------------------------------------------- 候选控件
-
-    /** 重新收集候选控件（只用于找滚动容器）；旧快照会被回收 */
-    private boolean refreshCandidates() {
-        lastCandidateScan = SystemClock.uptimeMillis();
-        AccessibilityNodeInfo root = getFocusableRoot();
-        if (root == null) return false;
-
-        List<FocusNavigator.Node> nodes = FocusNavigator.collectCandidates(root, screenRect);
-        root.recycle();
-
-        FocusNavigator.recycleAll(candidates, null);
-        candidates.clear();
-        candidates.addAll(nodes);
-        return !candidates.isEmpty();
-    }
-
-    private boolean ensureCandidates() {
-        return !candidates.isEmpty() || refreshCandidates();
-    }
-
     /**
-     * 页面变化后重新收集控件并刷新光标显示。
+     * 页面变化后刷新光标显示。
      *
      * 光标位置不受影响：它属于“鼠标”，不属于任何页面内容。
      */
@@ -568,7 +498,6 @@ public class FocusNavigationService extends AccessibilityService {
             hideOverlay("refresh-editMode");
             return;
         }
-        refreshCandidates();
         if (cursorX < 0 || cursorY < 0) {
             cursorX = screenRect.centerX();
             cursorY = screenRect.centerY();
@@ -587,17 +516,6 @@ public class FocusNavigationService extends AccessibilityService {
         if (cursorX < 0 || cursorY < 0) {
             cursorX = screenRect.centerX();
             cursorY = screenRect.centerY();
-        }
-        if (moveRepeating) {
-            // 连发期间不做整树遍历：一屏控件收集一次要几毫秒到十几毫秒，
-            // 24ms 一步的节奏下会明显掉帧。只有候选还是空的时候（刚进新页面就按住）
-            // 才补一次，并按最小间隔节流。
-            if (candidates.isEmpty()
-                    && SystemClock.uptimeMillis() - lastCandidateScan > REFRESH_MIN_INTERVAL_MS) {
-                refreshCandidates();
-            }
-        } else {
-            ensureCandidates();
         }
 
         int minX = 1;
@@ -690,185 +608,7 @@ public class FocusNavigationService extends AccessibilityService {
         }
     }
 
-    // ---------------------------------------------------------------- 滚动 / 翻页
-
-    /**
-     * 滚动一屏（或一小段）。
-     *
-     * 关键在于“翻哪一片区域”：以光标坐标为锚点，滚动容器取自光标附近控件的祖先，
-     * 所以“鼠标在哪就翻哪一片”；节点滚动不可用时，手势滑动也发生在光标的 x（纵向）
-     * 或 y（横向）上。滚动完成后<b>光标原地不动</b>。
-     *
-     * @param intervalMs 连发间隔；&lt;=0 表示这是一次单独的翻页。连发时手势时长与稳定等待
-     *                   都会被压缩到间隔以内，否则上一次手势还没演完下一次就来了，
-     *                   系统会把后一次判成无效手势——这正是“连发不流畅”的根因。
-     */
-    private void pageScroll(final FocusNavigator.Direction dir, final float ratio,
-                            long intervalMs) {
-        int ax = (cursorX < 0) ? screenRect.centerX() : cursorX;
-        int ay = (cursorY < 0) ? screenRect.centerY() : cursorY;
-        ax = clamp(ax, 1, screenRect.width() - 1);
-        ay = clamp(ay, 1, screenRect.height() - 1);
-
-        final long swipeDuration = (intervalMs > 0)
-                ? Math.max(80, Math.min(SWIPE_MAX_DURATION_MS, intervalMs - 35))
-                : SWIPE_MAX_DURATION_MS;
-
-        // 0) 连发时节点会被回收，快照可能整体失效。失效了就重新收集，
-        //    否则下面找不到滚动容器——这正是“第一次能滚、后面全都不动”的原因。
-        if (!candidatesUsable()) {
-            refreshCandidates();
-        }
-
-        // 1) 优先用节点滚动：滚动容器取自光标附近控件的祖先
-        boolean scrolled = false;
-        AccessibilityNodeInfo scroller = findScrollableNearCursor(ax, ay);
-        if (scroller != null) {
-            scrolled = performScrollAction(scroller, dir);
-            scroller.recycle();
-        }
-
-        // 2) 节点滚动不可用（自绘 View / WebView / 只响应触摸的列表）：坐标手势兜底
-        if (!scrolled) {
-            scrolled = swipePage(dir, ax, ay, ratio, swipeDuration);
-            Log.d(TAG, "pageScroll: nodeScroll failed, gesture=" + scrolled + " dir=" + dir);
-        }
-        if (!scrolled) {
-            Log.d(TAG, "pageScroll: nothing scrollable, dir=" + dir
-                    + " candidates=" + candidates.size());
-            return;
-        }
-
-        // 3) 连发期间不重新遍历节点树：每跳一次就遍历一遍整棵树既慢又会让候选反复失效，
-        //    表现为“滚动卡顿”。只重绘鼠标，等松手时再统一收一次。
-        if (pageRepeating) {
-            drawCursor();
-            return;
-        }
-
-        final long settle = (intervalMs > 0)
-                ? Math.min(SCROLL_SETTLE_MS, intervalMs) : SCROLL_SETTLE_MS;
-        handler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                refreshCurrentWindow();
-            }
-        }, settle);
-    }
-
-    /**
-     * 候选快照是否还可用。
-     *
-     * 滚动会导致节点实例失效，此时再去遍历它们必然失败。
-     * 只抽查前几个节点，避免每次都遍历全表。
-     */
-    private boolean candidatesUsable() {
-        if (candidates.isEmpty()) return false;
-        int n = Math.min(3, candidates.size());
-        for (int i = 0; i < n; i++) {
-            if (candidates.get(i).info.refresh()) return true;
-        }
-        return false;
-    }
-
-    /**
-     * 找光标附近可用于滚动的容器（调用方负责 recycle）。
-     *
-     * 按“离光标由近到远”依次尝试，第一个能滚的就用它，
-     * 这样滚动的就是鼠标底下的那一片。
-     */
-    private AccessibilityNodeInfo findScrollableNearCursor(int x, int y) {
-        // 按中心点离光标的距离排序，逐个往上找可滚动祖先
-        List<FocusNavigator.Node> sorted = new ArrayList<>(candidates);
-        Collections.sort(sorted, new Comparator<FocusNavigator.Node>() {
-            @Override
-            public int compare(FocusNavigator.Node a, FocusNavigator.Node b) {
-                return distanceToRect(a.bounds, x, y) - distanceToRect(b.bounds, x, y);
-            }
-        });
-        int limit = Math.min(sorted.size(), 12);
-        for (int i = 0; i < limit; i++) {
-            FocusNavigator.Node n = sorted.get(i);
-            if (!n.info.refresh()) continue;
-            AccessibilityNodeInfo s = FocusNavigator.findScrollableAncestor(n.info);
-            if (s != null) return s;
-        }
-        return null;
-    }
-
-    /** 在锚点坐标处做一次滑动手势；纵向用锚点 x，横向用锚点 y */
-    private boolean swipePage(FocusNavigator.Direction dir, int ax, int ay, float ratio,
-                              long durationMs) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
-
-        int w = screenRect.width();
-        int h = screenRect.height();
-        if (w <= 0 || h <= 0) return false;
-
-        float x1, y1, x2, y2;
-        switch (dir) {
-            case DOWN:   // 看下面 -> 手指向上滑
-                x1 = x2 = ax;
-                y1 = h * 0.82f;
-                y2 = y1 - h * ratio;
-                break;
-            case UP:     // 看上面 -> 手指向下滑
-                x1 = x2 = ax;
-                y1 = h * 0.18f;
-                y2 = y1 + h * ratio;
-                break;
-            case RIGHT:  // 看右边 -> 手指向左滑
-                y1 = y2 = ay;
-                x1 = w * 0.82f;
-                x2 = x1 - w * ratio;
-                break;
-            case LEFT:
-            default:     // 看左边 -> 手指向右滑
-                y1 = y2 = ay;
-                x1 = w * 0.18f;
-                x2 = x1 + w * ratio;
-                break;
-        }
-
-        x1 = clamp((int) x1, 1, w - 1);
-        x2 = clamp((int) x2, 1, w - 1);
-        y1 = clamp((int) y1, 1, h - 1);
-        y2 = clamp((int) y2, 1, h - 1);
-
-        Path path = new Path();
-        path.moveTo(x1, y1);
-        path.lineTo(x2, y2);
-        GestureDescription.StrokeDescription stroke =
-                new GestureDescription.StrokeDescription(path, 0, durationMs);
-        GestureDescription gd = new GestureDescription.Builder().addStroke(stroke).build();
-        return dispatchGesture(gd, null, null);
-    }
-
-    private boolean performScrollAction(AccessibilityNodeInfo scroller,
-                                        FocusNavigator.Direction dir) {
-        boolean backward = (dir == FocusNavigator.Direction.UP
-                || dir == FocusNavigator.Direction.LEFT);
-        int action = backward
-                ? AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
-                : AccessibilityNodeInfo.ACTION_SCROLL_FORWARD;
-
-        if (scroller.performAction(action)) return true;
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            int alt;
-            if (dir == FocusNavigator.Direction.UP) {
-                alt = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.getId();
-            } else if (dir == FocusNavigator.Direction.DOWN) {
-                alt = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.getId();
-            } else if (dir == FocusNavigator.Direction.LEFT) {
-                alt = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.getId();
-            } else {
-                alt = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.getId();
-            }
-            if (scroller.performAction(alt)) return true;
-        }
-        return false;
-    }
+    // ---------------------------------------------------------------- 滚动 / 翻页（已移除 2468 翻页，保留确认键等逻辑）
 
     // ---------------------------------------------------------------- 确认键
 
@@ -1194,12 +934,12 @@ public class FocusNavigationService extends AccessibilityService {
     /**
      * 方向键：短按走一步；按住则<b>由服务自己驱动连发</b>，间隔递减 + 步长递增。
      *
-     * 为什么不依赖系统按键重复（repeatCount）：本项目的数字键长按翻页已经踩过同一个坑——
+     * 为什么不依赖系统按键重复（repeatCount）：不同设备按键行为差异巨大，
      * 不少功能机 / 蓝牙键盘按住方向键时<b>根本不发重复事件</b>，
      * 要么只有按下时一个 DOWN、松手时一个 UP，要么发一串 DOWN/UP 对而 repeatCount 始终为 0。
      * 两种情况下“按住让光标连续移动”都不会发生，只会走一步。
-     *
-     * 所以这里自己起定时器，按键事件只负责三件事：
+     * 全靠服务自己的定时器自驱动，按键事件只用来起定时器、保活和确认松手，
+     * 才能在两类设备上都稳稳连发。
      * - 首次 DOWN：立刻走一步（保住点按的即时反馈），并起连发定时器；
      * - 同一次按压的后续信号（repeatCount&gt;0 的 DOWN，或 {@link #KEY_STILL_HELD_MS} 内
      *   同一个键的再次 DOWN）：只刷新看门狗时间，定时器继续跑，绝不重启；
@@ -1367,8 +1107,6 @@ public class FocusNavigationService extends AccessibilityService {
             // 连发期间跳过了整树遍历，停下后补一次，让候选与停下来后的界面对上
             scheduleRefresh(0);
         }
-        // 注：pageRepeating 由数字键长按翻页路径自己用 stopPageReset 管理，
-        // 方向键释放不再触碰它（原来为贴边滚动服务，已移除）。
     }
 
     // ------------------------------------------------- 0 键 + 方向键 = 拖拽滑动
@@ -1448,10 +1186,10 @@ public class FocusNavigationService extends AccessibilityService {
     /**
      * 从光标当前位置做一次滑动手势，<b>dir 表示“想看哪个方向的内容”</b>。
      *
-     * 方向约定必须与 {@link #swipePage} 和长按 2/8/4/6 的翻页语义完全一致：
+     * 方向约定：
      * 按下 = 想看下面 = 手指向上滑 = 内容上移。
      * 注意这与“手指的拖动方向”相反，容易写反：写成“按下就往下滑”的话，
-     * 按 0+下 会把页面往上拉，与翻页键、与直觉都相反。
+     * 按 0+下 会把页面往上拉，与直觉相反。
      *
      * 起点严格是光标坐标；终点按屏幕比例推算后 clamp 进屏幕。
      * 若光标已经贴着对侧边缘、剩余距离太短，就把起点往回退一点凑够最短距离，
@@ -1512,122 +1250,18 @@ public class FocusNavigationService extends AccessibilityService {
     }
 
     /**
-     * 数字键：
-     * - 短按 = 鼠标跳到对应九宫格的中间；
-     * - 长按 2/8/4/6 = 向上/下/左/右翻页，并<b>持续连发且逐渐加快</b>。
-     *
-     * 长按判定的坑：不能把一次 ACTION_UP 当成“用户松手了”。
-     *
-     * 不少功能机 / 输入法在长按数字键时，发的并不是标准的
-     * 「DOWN + repeatCount 递增」，而是<b>一串重复的 DOWN/UP 对</b>（repeatCount 始终为 0）。
-     * 若每次收到 UP 就取消连发定时器并重置状态，定时器永远活不过第一次触发，
-     * 表现就是“长按只滚动一下”。
-     *
-     * 所以这里以“物理按压”为单位来判定：
-     * - 抬键后 {@link #KEY_STILL_HELD_MS} 内又按下同一个键，视为同一次按压，沿用原计时；
-     * - 抬键后等待 {@link #KEY_STILL_HELD_MS} 仍没有新的按下，才认定为真正松手，
-     *   此时才补一次九宫格跳转（短按）或结束连发（长按）。
+     * 数字键 1~9：九宫格直送光标
+     * - <b>按下即跳</b>到对应九宫格的几何中心（ACTION_DOWN 触发，松开忽略）；
+     * - 无长按翻页功能，2468 仅用于九宫格定位。
      */
     private boolean handleNumberKey(KeyEvent event) {
         final int keyCode = event.getKeyCode();
-        final long now = SystemClock.uptimeMillis();
-
-        if (event.getAction() == KeyEvent.ACTION_UP) {
-            numberKeyLastSignal = now;
-            lastKeyUpCode = keyCode;
-            lastKeyUpTime = now;
-
-            // 不立即判定为松手：等一小会儿，看它是不是同一次长按里的又一次按下
-            pendingTapKey = keyCode;
-            handler.removeCallbacks(pendingTapRunnable);
-            handler.postDelayed(pendingTapRunnable, KEY_STILL_HELD_MS);
-            Log.d(TAG, "key UP " + keyCode + " repeat=" + event.getRepeatCount());
-            return true;
-        }
-        if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
-
-        numberKeyLastSignal = now;
-
-        // 抬键后很快又按下同一个键 = 同一次按压，不要重置计时与长按状态
-        boolean samePress = (keyCode == lastKeyUpCode)
-                && (now - lastKeyUpTime < KEY_STILL_HELD_MS);
-
-        // 来了新的按下，说明不是短按，取消待判定的跳转
-        handler.removeCallbacks(pendingTapRunnable);
-        pendingTapKey = -1;
-
-        if (samePress) {
-            // repeatCount 递增的 DOWN 也走这里：只需要保活，定时器已经在跑
-            Log.v(TAG, "key DOWN " + keyCode + " repeat=" + event.getRepeatCount()
-                    + " samePress");
-            return true;
-        }
-
-        numberKeyDown = keyCode;
-        pageLongFired = false;
-        pageRepeatCount = 0;
-        Log.d(TAG, "key DOWN " + keyCode + " repeat=" + event.getRepeatCount() + " newPress");
-
-        final FocusNavigator.Direction dir = pageDirectionOf(keyCode);
-        if (dir == null) return true;   // 1/3/5/7/9 只有九宫格语义，没有翻页语义
-
-        final Runnable[] holder = new Runnable[1];
-        holder[0] = new Runnable() {
-            @Override
-            public void run() {
-                // 看门狗：仅在 ACTION_UP 丢失时兜底，正常松手由 UP 分支停止
-                if (SystemClock.uptimeMillis() - numberKeyLastSignal > PAGE_WATCHDOG_MS) {
-                    Log.d(TAG, "pageRepeat stop: no key signal for " + PAGE_WATCHDOG_MS + "ms");
-                    stopPageRepeat();
-                    return;
-                }
-                pageLongFired = true;
-                pageRepeating = true;
-                long interval = Math.max(PAGE_REPEAT_MIN_MS,
-                        PAGE_REPEAT_START_MS - pageRepeatCount * PAGE_REPEAT_DECAY_MS);
-                Log.d(TAG, "pageRepeat #" + pageRepeatCount + " interval=" + interval);
-                pageScroll(dir, PAGE_SWIPE_RATIO, interval);
-                pageRepeatCount++;
-                handler.postDelayed(holder[0], interval);
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            if (event.getRepeatCount() == 0) {
+                jumpToGrid(keyCode);
             }
-        };
-        pageRepeatRunnable = holder[0];
-        handler.postDelayed(holder[0], LONG_PRESS_MS);
+        }
         return true;
-    }
-
-    /** 真正松手后的收尾：短按跳九宫格，长按则补一次节点收集 */
-    private final Runnable pendingTapRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (pendingTapKey < 0) return;
-            int key = pendingTapKey;
-            pendingTapKey = -1;
-
-            stopPageRepeat();
-            if (!pageLongFired) {
-                jumpToGrid(key);
-            } else if (pageRepeating) {
-                // 连发期间跳过了节点收集，松手时补一次，让候选与停下来后的界面对上
-                pageRepeating = false;
-                pageRepeatCount = 0;
-                scheduleRefresh(0);
-            }
-            numberKeyDown = -1;
-            pageLongFired = false;
-        }
-    };
-
-    private void stopPageRepeat() {
-        if (pageRepeatRunnable != null) {
-            handler.removeCallbacks(pageRepeatRunnable);
-            pageRepeatRunnable = null;
-        }
-        if (pageRepeating) {
-            pageRepeating = false;
-            pageRepeatCount = 0;
-            scheduleRefresh(0);
-        }
     }
 
     private static FocusNavigator.Direction directionOf(int keyCode) {
@@ -1643,23 +1277,6 @@ public class FocusNavigationService extends AccessibilityService {
         }
     }
 
-    /** 只有 2/8/4/6 有翻页语义；其余数字键返回 null（避免 5 与确认键抢语义） */
-    private static FocusNavigator.Direction pageDirectionOf(int keyCode) {
-        switch (keyCode) {
-            case KeyEvent.KEYCODE_2:
-                return FocusNavigator.Direction.UP;
-            case KeyEvent.KEYCODE_8:
-                return FocusNavigator.Direction.DOWN;
-            case KeyEvent.KEYCODE_4:
-                return FocusNavigator.Direction.LEFT;
-            case KeyEvent.KEYCODE_6:
-                return FocusNavigator.Direction.RIGHT;
-            default:
-                return null;
-        }
-    }
-
-    /**
     /**
      * 确认键：短按 = 在光标处点击；长按(≥500ms) = 在光标处长按。
      *
@@ -1745,7 +1362,6 @@ public class FocusNavigationService extends AccessibilityService {
         super.onDestroy();
         handler.removeCallbacksAndMessages(null);
         NavigationPrefs.unregisterListener(this, prefListener);
-        FocusNavigator.recycleAll(candidates, null);
         if (overlay != null && windowManager != null) {
             try {
                 windowManager.removeView(overlay);
