@@ -410,8 +410,39 @@ public class FocusNavigationService extends AccessibilityService {
     }
 
     private void updateScreenRect() {
+        // 光标活动范围 = 整个物理屏幕（含系统状态栏 / 导航栏 inset），
+        // 不是应用内容区。原因：悬浮层本身是 MATCH_PARENT 铺满整屏，
+        // 而系统给应用的 DisplayMetrics.heightPixels 往往已把导航栏 inset 扣掉
+        // （本机 320x480 物理屏，应用 app 尺寸是 320x439），
+        // 若用它当 maxY，光标永远到不了底部被 inset 遮住的那几行——
+        // 表现正是“选不中最底下一行 tab”。
+        int w;
+        int h;
+        WindowManager wm = windowManager;
+        if (wm == null) {
+            wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && wm != null) {
+            try {
+                android.graphics.Rect max =
+                        wm.getMaximumWindowMetrics().getBounds();
+                w = max.width();
+                h = max.height();
+            } catch (Throwable t) {
+                Log.w(TAG, "getMaximumWindowMetrics failed: " + t);
+                DisplayMetrics dm = getResources().getDisplayMetrics();
+                w = dm.widthPixels;
+                h = dm.heightPixels;
+            }
+        } else {
+            DisplayMetrics dm = getResources().getDisplayMetrics();
+            w = dm.widthPixels;
+            h = dm.heightPixels;
+        }
+        screenRect.set(0, 0, w, h);
         DisplayMetrics dm = getResources().getDisplayMetrics();
-        screenRect.set(0, 0, dm.widthPixels, dm.heightPixels);
+        Log.d(TAG, "updateScreenRect screen=" + w + "x" + h
+                + " dm=" + dm.widthPixels + "x" + dm.heightPixels);
     }
 
     // ---------------------------------------------------------------- 悬浮鼠标层
@@ -586,6 +617,10 @@ public class FocusNavigationService extends AccessibilityService {
         }
         cursorX = clamp(nx, minX, maxX);
         cursorY = clamp(ny, minY, maxY);
+        if (cursorY >= maxY || cursorX <= minX || cursorX >= maxX) {
+            Log.d(TAG, "moveCursor clamped (" + cursorX + "," + cursorY
+                    + ") maxY=" + maxY + " maxX=" + maxX);
+        }
         drawCursor();
     }
 
