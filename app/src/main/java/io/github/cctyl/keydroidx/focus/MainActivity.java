@@ -19,6 +19,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvServiceStatus;
     private Switch swEnabled;
     private Button btnOpenSettings;
+    private Button btnBlacklist;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -28,12 +29,21 @@ public class MainActivity extends AppCompatActivity {
         tvServiceStatus = findViewById(R.id.tvServiceStatus);
         swEnabled = findViewById(R.id.swEnabled);
         btnOpenSettings = findViewById(R.id.btnOpenSettings);
+        btnBlacklist = findViewById(R.id.btnBlacklist);
 
         btnOpenSettings.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 // 跳到系统无障碍设置页，让用户手动开启本服务
                 startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            }
+        });
+
+        btnBlacklist.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                // 配置应用黑名单：黑名单 App 内不显示光标、按键全部放行
+                startActivity(new Intent(MainActivity.this, BlacklistActivity.class));
             }
         });
 

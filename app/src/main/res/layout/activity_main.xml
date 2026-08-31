@@ -41,6 +41,14 @@
         android:text="@string/open_accessibility_settings"
         android:textAllCaps="false" />
 
+    <Button
+        android:id="@+id/btnBlacklist"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/open_app_blacklist"
+        android:textAllCaps="false" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

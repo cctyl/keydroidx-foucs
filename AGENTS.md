@@ -50,8 +50,9 @@ FocusNavigationService  ── 全部状态机都在这里（本项目的"心脏
   - `isOurOwnApp()` / `editMode`：自家界面 / 输入框聚焦时放行按键、隐藏光标。
 - **`FocusNavigator.java`**：纯算法。旧焦点模型遗留工具类，**改代码时别把它们当成现役逻辑**。
 - **`CursorOverlay.java`**：全屏画布，**只画光标本体**（白圈黑描边 + 四向准星 + 橙点）。不要往里加控件高亮 / 锁定框。
-- **`MainActivity.java`**：配置页（跳系统无障碍设置 + 启用开关 + 说明文字）。
-- **`NavigationPrefs.java`**：`SharedPreferences` 的 `enabled` 开关，关着时服务在系统设置里开着也不拦截任何按键。
+- **`MainActivity.java`**：配置页（跳系统无障碍设置 + 启用开关 + 应用黑名单入口 + 说明文字）。
+- **`BlacklistActivity.java`**：应用黑名单配置页（列出带 LAUNCHER 的应用，整行点按勾选，写 `NavigationPrefs` 即时生效）。Manifest 里必须有 `<queries>`（MAIN/LAUNCHER），否则 targetSdk 30+ 查不到其他应用。
+- **`NavigationPrefs.java`**：`SharedPreferences` 的 `enabled` 开关 + `blacklist_pkgs` 黑名单 StringSet，服务注册监听器实时感知。
 
 ## 4. 交互模型
 
@@ -67,6 +68,7 @@ FocusNavigationService  ── 全部状态机都在这里（本项目的"心脏
 | 光标顶到屏幕边缘继续按 | 光标 clamp 住停住，**不再触发滚动**。滚动只由 0+方向键拖拽触发 |
 | 返回键 | `GLOBAL_ACTION_BACK` |
 | 本 App 自己的界面 / 输入框聚焦 | 放行按键、隐藏光标 |
+| **黑名单应用内** | 光标完全失效（不显示），方向键/数字键/确认键/星井组合/BACK 等**全部原样放行**给该 App，与服务未拦截时一致；离开黑名单应用光标自动恢复。判断在 `refreshActivePackage()` 之后，用 `isBlacklistedApp()` + `releaseAllKeys()` 清场（连发/拖拽/长按定时器/组合键状态都要清，否则残留定时器会在放行期间继续点） |
 
 **手势方向语义（极易写反，已踩坑）**：`Direction.DOWN` 表示"想看下面的内容"，对应手指**向上**滑（`swipeFromCursor` 拖拽）。若按"手指拖动方向"实现，0+下 会把页面往上拉。
 

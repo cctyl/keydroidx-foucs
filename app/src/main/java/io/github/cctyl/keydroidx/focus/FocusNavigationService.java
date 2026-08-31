@@ -43,6 +43,9 @@ import java.util.List;
  *    挂起期间光标隐藏，除本组合键外的按键全部放行给前台 App / 系统——
  *    方向键在支持的 App 里照常可见地工作（移动列表焦点、翻页），与服务未拦截时一致；
  *    恢复后光标从原位置继续。
+ * 7. <b>黑名单应用</b>：用户在 App 内配置的黑名单（见 {@link BlacklistActivity}）里的应用，
+ *    光标完全不工作——不显示，也不拦截任何按键（方向键 / 数字键 / 确认键 / 组合键
+ *    全部原样放行，与服务未拦截时一致）；离开黑名单应用后光标自动恢复。
  *
  * <b>核心原则：光标就是唯一的真相。</b>
  * 屏幕上不画任何控件高亮 / 锁定框，点击也不经过“选中某个 AccessibilityNodeInfo
@@ -280,6 +283,13 @@ public class FocusNavigationService extends AccessibilityService {
                             scheduleRefresh(WINDOW_READY_DELAY_MS);
                         } else {
                             hideOverlay("pref-disabled");
+                        }
+                    } else if (NavigationPrefs.KEY_BLACKLIST.equals(key)) {
+                        // 黑名单实时生效：当前正处于黑名单应用则立即清场并隐藏光标；
+                        // 不在的话无需动作，之后的刷新 / 按键自会按新名单判断。
+                        if (isBlacklistedApp()) {
+                            releaseAllKeys();
+                            hideOverlay("blacklist-changed:" + currentPackage);
                         }
                     }
                 }
@@ -524,8 +534,8 @@ public class FocusNavigationService extends AccessibilityService {
     private void refreshCurrentWindow() {
         refreshActivePackage();
 
-        if (!NavigationPrefs.isEnabled(this) || isOurOwnApp()) {
-            hideOverlay("refresh-ownApp:" + currentPackage);
+        if (!NavigationPrefs.isEnabled(this) || isOurOwnApp() || isBlacklistedApp()) {
+            hideOverlay("refresh-hide:" + currentPackage);
             return;
         }
         if (editMode) {
@@ -763,6 +773,11 @@ public class FocusNavigationService extends AccessibilityService {
             hideOverlay("ownApp:" + currentPackage);
             return;
         }
+        if (isBlacklistedApp()) {
+            // 切进黑名单应用：立即隐藏光标，不等刷新防抖（事件包名已更新为前台应用）
+            hideOverlay("blacklist:" + currentPackage);
+            return;
+        }
         if (editMode) {
             hideOverlay("editMode");
             return;
@@ -785,6 +800,34 @@ public class FocusNavigationService extends AccessibilityService {
 
     private boolean isOurOwnApp() {
         return currentPackage != null && currentPackage.equals(getPackageName());
+    }
+
+    /** 当前前台应用是否在用户配置的黑名单里（黑名单应用内光标完全不工作） */
+    private boolean isBlacklistedApp() {
+        return NavigationPrefs.isBlacklisted(this, currentPackage);
+    }
+
+    /**
+     * 按键放行前的整体清场：停掉一切进行中的动作并复位按键状态。
+     *
+     * 用于“按键要原样交还”的场景（自家界面 / 输入框聚焦 / 黑名单应用）。
+     * 不能只 stopMoveRepeat()：连发、拖拽、确认键长按定时器、星井组合状态
+     * 任何一样残留，都会在放行期间继续移动光标 / 派发手势——
+     * 表现为“进了黑名单应用，光标却又冒出来点了一下”。
+     */
+    private void releaseAllKeys() {
+        handler.removeCallbacks(moveReleaseRunnable);
+        stopMoveRepeat();
+        stopDrag();
+        if (longPressRunnable != null) {
+            handler.removeCallbacks(longPressRunnable);
+            longPressRunnable = null;
+        }
+        zeroDown = false;
+        heldDirection = null;
+        starDown = false;
+        poundDown = false;
+        hideComboLocked = false;
     }
 
     /**
@@ -916,13 +959,15 @@ public class FocusNavigationService extends AccessibilityService {
                 + " pkg=" + currentPackage);
 
         if (!NavigationPrefs.isEnabled(this)) {
-            stopMoveRepeat();
+            releaseAllKeys();
             return false;
         }
         refreshActivePackage();
-        // 本 App 自己的界面、以及输入框获得焦点时，放行按键
-        if (isOurOwnApp() || editMode) {
-            stopMoveRepeat();
+        // 本 App 自己的界面、输入框获得焦点、黑名单应用：按键全部放行。
+        // 黑名单判断必须放在 refreshActivePackage() 之后——前台刚切到别的应用时，
+        // 第一个按键事件就要按新包名放行，不能沿用旧的 currentPackage。
+        if (isOurOwnApp() || editMode || isBlacklistedApp()) {
+            releaseAllKeys();
             return false;
         }
 
