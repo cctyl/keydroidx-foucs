@@ -39,6 +39,10 @@ import java.util.List;
  * 4. 确认键 = 在光标坐标处点击；长按确认键 = 在光标坐标处长按；
  * 5. <b>0 键 + 方向键同时按住</b> = 从光标当前位置朝该方向滑动（拖拽）。
  *    0 键是纯修饰键，自身不产生任何动作，所以与确认键的“点击”语义零冲突。
+ * 6. <b>星号键 + 井号键一起按</b> = 临时挂起鼠标导航（再按一次恢复）。
+ *    挂起期间光标隐藏，除本组合键外的按键全部放行给前台 App / 系统——
+ *    方向键在支持的 App 里照常可见地工作（移动列表焦点、翻页），与服务未拦截时一致；
+ *    恢复后光标从原位置继续。
  *
  * <b>核心原则：光标就是唯一的真相。</b>
  * 屏幕上不画任何控件高亮 / 锁定框，点击也不经过“选中某个 AccessibilityNodeInfo
@@ -105,6 +109,18 @@ public class FocusNavigationService extends AccessibilityService {
     private static final long WINDOW_READY_DELAY_MS = 250;
     /** 两次方向键按下间隔超过这个值，就认为是一次新的点按（连发计数清零） */
     private static final long NEW_GESTURE_GAP_MS = 300;
+    /**
+     * 星号键与井号键两次 DOWN 允许的最大间隔，在此之内视为“同时按下”。
+     * 必须 ≥ 人手先后按两键的正常间隔（100~200ms，几乎没人能真的同时落下）；
+     * 又不能太大，否则相隔较远的两次独立按键也会被误判成组合。
+     */
+    private static final long HIDE_COMBO_WINDOW_MS = 300;
+    /**
+     * 星号 + 井号组合触发一次切换后，两键都要“安静”这么久（没有任何星/井号事件）
+     * 才重新武装、允许下一次触发。必须 ≥ 发 DOWN/UP 对设备的事件间隔（常见 50~100ms），
+     * 否则按住两键期间会被连发流反复解锁、来回切换。
+     */
+    private static final long HIDE_COMBO_REARM_QUIET_MS = 250;
 
     /** 单步像素 = 屏幕短边 * 该比例，且不小于 STEP_MIN_PX */
     private static final float STEP_RATIO = 0.03f;
@@ -203,6 +219,21 @@ public class FocusNavigationService extends AccessibilityService {
     private FocusNavigator.Direction heldDirection;
     /** 0 键（滑动修饰键）是否处于按下状态 */
     private boolean zeroDown;
+
+    // ------------------------------------------------- 星号 + 井号 = 切换光标显隐
+    /** 星号键（*）是否处于按下状态 */
+    private boolean starDown;
+    /** 井号键（#）是否处于按下状态 */
+    private boolean poundDown;
+    /** 两键最近一次有效 DOWN（repeatCount=0）的时刻，用于“同时按下”判定 */
+    private long starDownTime;
+    private long poundDownTime;
+    /** 组合触发过一次切换后的锁定：两键都安静 {@link #HIDE_COMBO_REARM_QUIET_MS} 才解锁 */
+    private boolean hideComboLocked;
+    /** 最近一次星/井号键事件（DOWN 或 UP，含 repeat）的时刻，供解锁判断 */
+    private long lastComboKeySignal;
+    /** 用户已用星号+井号挂起鼠标导航：光标隐藏、除本组合键外全部按键放行 */
+    private boolean cursorHiddenByUser;
     /** 上一次真正遍历过节点树的时刻 */
     private long lastCandidateScan;
 
@@ -475,6 +506,9 @@ public class FocusNavigationService extends AccessibilityService {
             public void run() {
                 if (overlay == null) return;
                 overlay.update(cx, cy);
+                // 用户用星号+井号键临时隐藏了光标：坐标照常更新（恢复时就是最新位置），
+                // 但不把画布设为可见。页面刷新 / 连发移动都不会把光标“顶”出来。
+                if (cursorHiddenByUser) return;
                 if (overlay.getVisibility() != View.VISIBLE) {
                     overlay.setVisibility(View.VISIBLE);
                 }
@@ -895,6 +929,20 @@ public class FocusNavigationService extends AccessibilityService {
         int keyCode = event.getKeyCode();
         int action = event.getAction();
 
+        // 用户已用“星号+井号”挂起鼠标导航：除本组合键外，其余按键全部放行，
+        // 交给前台 App / 系统处理。方向键在这类 App 里仍可见地工作（移动列表焦点、
+        // 翻页等），与服务未拦截时一致——隐藏绝不是“让按键被吞掉却什么反应都没有”。
+        if (cursorHiddenByUser) {
+            stopMoveRepeat();
+            stopDrag();
+            zeroDown = false;
+            heldDirection = null;
+            if (keyCode == KeyEvent.KEYCODE_STAR || keyCode == KeyEvent.KEYCODE_POUND) {
+                return handleHideComboKey(event);
+            }
+            return false;
+        }
+
         switch (keyCode) {
             case KeyEvent.KEYCODE_DPAD_UP:
             case KeyEvent.KEYCODE_DPAD_DOWN:
@@ -915,6 +963,10 @@ public class FocusNavigationService extends AccessibilityService {
             case KeyEvent.KEYCODE_8:
             case KeyEvent.KEYCODE_9:
                 return handleNumberKey(event);
+
+            case KeyEvent.KEYCODE_STAR:
+            case KeyEvent.KEYCODE_POUND:
+                return handleHideComboKey(event);
 
             case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_ENTER:
@@ -1345,6 +1397,86 @@ public class FocusNavigationService extends AccessibilityService {
         return true;
     }
 
+    /**
+     * 星号键（*）+ 井号键（#）一起按：切换鼠标导航的挂起状态。
+     *
+     * 挂起 = 光标隐藏 + 除本组合键外全部按键放行（方向键由前台 App 自己处理，可见有效）；
+     * 恢复 = 光标从原位置重新显示，按键重新被服务接管。
+     * 触发判定必须兼容三类设备的按键行为（见类注释）：
+     * <ul>
+     *   <li>标准 / 沉默设备：两键都处于按下状态，或另一键的 DOWN 落在
+     *       {@link #HIDE_COMBO_WINDOW_MS} 窗口内，即算“同时按下”；</li>
+     *   <li>发 DOWN/UP 对的设备：按住时两键各自发一串 DOWN/UP，两键可能从不“同时”
+     *       处于按下态，所以还要看“另一键最近 DOWN 过”；且触发一次后进入锁定，
+     *       直到两键都安静 {@link #HIDE_COMBO_REARM_QUIET_MS} 才允许下一次触发——
+     *       否则按住两键会被连发流反复切换。</li>
+     * </ul>
+     * 自身不移动光标、不产生点击；在自家界面与输入框里整体放行，打字输入 * # 不受影响。
+     */
+    private boolean handleHideComboKey(KeyEvent event) {
+        final int keyCode = event.getKeyCode();
+        final long now = SystemClock.uptimeMillis();
+        final boolean isStar = keyCode == KeyEvent.KEYCODE_STAR;
+
+        // 距上次星/井号事件已安静够久：说明两键都松开了，解除锁定，允许下一次组合
+        if (hideComboLocked && now - lastComboKeySignal >= HIDE_COMBO_REARM_QUIET_MS) {
+            hideComboLocked = false;
+        }
+        lastComboKeySignal = now;
+
+        if (event.getAction() == KeyEvent.ACTION_UP) {
+            if (isStar) starDown = false;
+            else poundDown = false;
+            return true;
+        }
+        if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+        // 系统按键重复（按住连发）不参与组合判定，只保活
+        if (event.getRepeatCount() > 0) return true;
+
+        if (isStar) {
+            starDown = true;
+            starDownTime = now;
+        } else {
+            poundDown = true;
+            poundDownTime = now;
+        }
+        if (hideComboLocked) return true;
+
+        long otherDownTime = isStar ? poundDownTime : starDownTime;
+        boolean bothHeld = starDown && poundDown;
+        boolean otherRecent = otherDownTime > 0
+                && (now - otherDownTime) <= HIDE_COMBO_WINDOW_MS;
+        if (bothHeld || otherRecent) {
+            hideComboLocked = true;
+            toggleCursorHidden();
+        }
+        return true;
+    }
+
+    /**
+     * 切换光标的“用户显隐”状态。
+     *
+     * 隐藏走 {@link #hideOverlay(String)}；恢复不直接 show，而是走
+     * {@link #refreshCurrentWindow()}——它会重新校验自家界面 / 编辑模式，
+     * 避免在光标本该隐藏的场景里被这组按键强行点亮。
+     */
+    private void toggleCursorHidden() {
+        cursorHiddenByUser = !cursorHiddenByUser;
+        Log.d(TAG, "toggleCursorHidden -> hidden=" + cursorHiddenByUser);
+        if (cursorHiddenByUser) {
+            // 挂起：停掉一切进行中的动作（连发 / 拖拽），之后按键全部放行
+            stopMoveRepeat();
+            stopDrag();
+            zeroDown = false;
+            heldDirection = null;
+            hideOverlay("user-toggle");
+            toast("光标已隐藏，按键已放行；星号+井号恢复");
+        } else {
+            refreshCurrentWindow();
+            toast("鼠标导航已恢复");
+        }
+    }
+
     // ---------------------------------------------------------------- 销毁
 
     @Override
@@ -1353,6 +1485,9 @@ public class FocusNavigationService extends AccessibilityService {
         stopMoveRepeat();
         stopDrag();
         zeroDown = false;
+        starDown = false;
+        poundDown = false;
+        hideComboLocked = false;
         heldDirection = null;
         hideOverlay();
     }
