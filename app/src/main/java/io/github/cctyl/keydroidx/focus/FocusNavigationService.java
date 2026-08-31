@@ -153,20 +153,30 @@ public class FocusNavigationService extends AccessibilityService {
      * 到 {@link #DRAG_ACCEL_DURATION_MS} 后恒定不再变。
      * <pre>
      *   按住时长  0 ──── DRAG_ACCEL_DURATION_MS ────▶ ∞
-     *   单次距离  0.08 ────── 线性增大 ──────▶ 0.30   恒定
+     *   单次距离  0.12 ────── 线性增大 ──────▶ 0.30   恒定
      *   间隔      420ms ──── 线性减小 ────▶ 220ms     恒定
+     *   手势时长  100ms（恒定，快甩 fling，不随距离拉长）
      * </pre>
      * 轻点只触发首段小步滑动（按一下滚一点），按住则持续滚、越滚越快直到稳速。
+     * <p>关键：每次 swipe 走短时长 fling（{@link #DRAG_SWIPE_DURATION_MS}），
+     * 不是慢拖。否则横向 ViewPager 会把短而慢的拖动判成"没到底"再弹回当前页，
+     * 表现为"往左一下又往右一下"的抖动。短时长 → 速度高 → ViewPager 按速度提交切换。
      */
-    private static final float DRAG_RATIO_START = 0.08f;
+    private static final float DRAG_RATIO_START = 0.12f;
     /** 加速结束后的恒定滑动比例，比旧的 0.42 温和 */
     private static final float DRAG_RATIO_FINAL = 0.30f;
     /** 加速时长：到点后距离与间隔都恒定，不再增大 */
     private static final long DRAG_ACCEL_DURATION_MS = 1000;
     /** 连滑起步间隔（手势时长必须短于此值，否则上一次没演完下一次被判无效） */
     private static final long DRAG_INTERVAL_START_MS = 420;
-    /** 连滑恒定后的最快间隔；必须 &gt; {@link #SWIPE_MAX_DURATION_MS}(280) */
+    /** 连滑恒定后的最快间隔；必须 &gt; {@link #DRAG_SWIPE_DURATION_MS}(100) */
     private static final long DRAG_INTERVAL_FINAL_MS = 220;
+    /**
+     * 拖拽每次 swipe 的手势时长（恒定）。故意短：让每次都是快甩 fling 而非慢拖，
+     * 横向 ViewPager 才会按速度提交 tab 切换，而不是摸一下又弹回。
+     * 必须短于 {@link #DRAG_INTERVAL_FINAL_MS}。
+     */
+    private static final long DRAG_SWIPE_DURATION_MS = 100;
     /** 单次滑动的最短距离占屏幕短边比例，太短系统不认（拖拽起步小步也要保证过得去） */
     private static final float DRAG_SWIPE_MIN_RATIO = 0.06f;
 
@@ -1404,7 +1414,9 @@ public class FocusNavigationService extends AccessibilityService {
                 long interval = Math.round(DRAG_INTERVAL_START_MS
                         + (DRAG_INTERVAL_FINAL_MS - DRAG_INTERVAL_START_MS) * t);
                 // 手势时长必须短于间隔，否则上一次没演完下一次就来了，会被判无效
-                long duration = Math.max(80, Math.min(SWIPE_MAX_DURATION_MS, interval - 60));
+                // 恒定短时长 fling：不随距离/间隔拉长，保证每次都是快甩，
+                // ViewPager 按速度提交、ScrollView 按 fling 滚。
+                long duration = Math.max(80, Math.min(DRAG_SWIPE_DURATION_MS, interval - 60));
                 dragRepeatCount++;
                 swipeFromCursor(dir, ratio, duration);
                 Log.v(TAG, "drag #" + dragRepeatCount + " t=" + t
@@ -1413,8 +1425,9 @@ public class FocusNavigationService extends AccessibilityService {
             }
         };
         dragRepeatRunnable = holder[0];
-        // 立刻来一次起步小步滑动，反馈即时（轻点就只滚这一点）
-        swipeFromCursor(dir, DRAG_RATIO_START, SWIPE_MAX_DURATION_MS);
+        // 立刻来一次起步小步滑动，反馈即时（轻点就只滚这一点）。
+        // 同样用短时长 fling，起步也别慢拖（慢拖会被 ViewPager 弹回）。
+        swipeFromCursor(dir, DRAG_RATIO_START, DRAG_SWIPE_DURATION_MS);
         handler.postDelayed(holder[0], DRAG_INTERVAL_START_MS);
     }
 
