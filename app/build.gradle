@@ -6,6 +6,32 @@ def localProps = new Properties()
 def localPropsFile = rootProject.file("local.properties")
 if (localPropsFile.exists()) localPropsFile.withInputStream { localProps.load(it) }
 
+// 签名凭据只从本地文件读取（keystore.properties 优先，其次 gradle.properties 的 RELEASE_*），
+// 两者都已被 .gitignore 忽略；都缺失时 signingProps 为 null，回退 AGP 默认 debug 签名，
+// 保证干净克隆（没有密钥）也能构建。
+def signingProps = null
+def keystorePropsFile = rootProject.file("keystore.properties")
+if (keystorePropsFile.exists()) {
+    def p = new Properties()
+    keystorePropsFile.withInputStream { p.load(it) }
+    signingProps = [
+            storeFile    : p.getProperty("RELEASE_STORE_FILE"),
+            storePassword: p.getProperty("RELEASE_STORE_PASSWORD"),
+            keyAlias     : p.getProperty("RELEASE_KEY_ALIAS"),
+            keyPassword  : p.getProperty("RELEASE_KEY_PASSWORD"),
+    ]
+} else if (project.hasProperty("RELEASE_STORE_FILE")) {
+    signingProps = [
+            storeFile    : RELEASE_STORE_FILE,
+            storePassword: project.hasProperty("RELEASE_STORE_PASSWORD") ? RELEASE_STORE_PASSWORD : "",
+            keyAlias     : project.hasProperty("RELEASE_KEY_ALIAS") ? RELEASE_KEY_ALIAS : "",
+            keyPassword  : project.hasProperty("RELEASE_KEY_PASSWORD") ? RELEASE_KEY_PASSWORD : "",
+    ]
+}
+if (signingProps != null && !(signingProps.storeFile && rootProject.file(signingProps.storeFile).exists())) {
+    signingProps = null
+}
+
 android {
     namespace 'io.github.cctyl.keydroidx.focus'
     compileSdk rootProject.ext.COMPILE_SDK
@@ -23,23 +49,26 @@ android {
     }
 
     signingConfigs {
-        release {
-            storeFile rootProject.file(project.hasProperty("RELEASE_STORE_FILE") ? RELEASE_STORE_FILE : "test.jks")
-            storePassword project.hasProperty("RELEASE_STORE_PASSWORD") ? RELEASE_STORE_PASSWORD : ""
-            keyAlias project.hasProperty("RELEASE_KEY_ALIAS") ? RELEASE_KEY_ALIAS : "key0"
-            keyPassword project.hasProperty("RELEASE_KEY_PASSWORD") ? RELEASE_KEY_PASSWORD : ""
-            v1SigningEnabled true
-            v2SigningEnabled true
+        if (signingProps != null) {
+            release {
+                storeFile rootProject.file(signingProps.storeFile)
+                storePassword signingProps.storePassword
+                keyAlias signingProps.keyAlias
+                keyPassword signingProps.keyPassword
+                v1SigningEnabled true
+                v2SigningEnabled true
+            }
         }
     }
 
     buildTypes {
         debug {
-            signingConfig signingConfigs.release
+            // 没有本地密钥时用 AGP 默认的 debug 签名，保证干净克隆也能装到设备上
+            signingConfig signingProps != null ? signingConfigs.release : signingConfigs.debug
         }
         release {
             minifyEnabled false
-            signingConfig signingConfigs.release
+            if (signingProps != null) signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
