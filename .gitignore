@@ -23,10 +23,7 @@ gradle.properties
 *.keystore
 app/test.jks
 sample/test.jks
-# 例外：test.jks 是脚手架自带的测试签名密钥（密码在 git-ignored 的
-# gradle.properties 里），app/build.gradle 的 signingConfig 无条件引用它，
-# 不提交的话新环境 assembleDebug 直接失败。
-!test.jks
+
 
 # OS
 .DS_Store

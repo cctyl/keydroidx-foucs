@@ -16,6 +16,7 @@ import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.Surface;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
@@ -257,6 +258,17 @@ public class FocusNavigationService extends AccessibilityService {
     private long lastRefreshTime;
     private final Rect screenRect = new Rect();
 
+    /**
+     * 当前屏幕相对设备自然朝向的旋转角（{@link Surface#ROTATION_0}…{@link Surface#ROTATION_270}）。
+     *
+     * 仅在 {@link #updateScreenRect()} 里刷新（配置变化 / 服务启动时），
+     * 按键热路径只读这个字段——不在 52ms 连发里做 Binder 调用，守住性能红线。
+     *
+     * 用途：横屏时把“物理方向键 / 数字九宫格”按当前旋转投影到屏幕坐标，
+     * 让“按上键就往上走、按 1 就到左上角”在横屏依然成立。
+     */
+    private int screenRotation = Surface.ROTATION_0;
+
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private Runnable longPressRunnable;
@@ -457,9 +469,20 @@ public class FocusNavigationService extends AccessibilityService {
             h = dm.heightPixels;
         }
         screenRect.set(0, 0, w, h);
+        // 同步当前屏幕旋转。getDefaultDisplay() 在 API 30 被标记 deprecated，
+        // 但仍可用；它的 getRotation() 正是“相对自然朝向的旋转角”，
+        // 是我们要的信号（区分 ROTATION_90 / ROTATION_270 两种横屏）。
+        if (wm != null) {
+            try {
+                screenRotation = wm.getDefaultDisplay().getRotation();
+            } catch (Throwable t) {
+                Log.w(TAG, "getRotation failed: " + t);
+            }
+        }
         DisplayMetrics dm = getResources().getDisplayMetrics();
         Log.d(TAG, "updateScreenRect screen=" + w + "x" + h
-                + " dm=" + dm.widthPixels + "x" + dm.heightPixels);
+                + " dm=" + dm.widthPixels + "x" + dm.heightPixels
+                + " rot=" + screenRotation);
     }
 
     // ---------------------------------------------------------------- 悬浮鼠标层
@@ -615,7 +638,12 @@ public class FocusNavigationService extends AccessibilityService {
     }
 
     /**
-     * 九宫格跳转：1~9 对应屏幕 3x3 的九块区域（1 左上，9 右下）。
+     * 九宫格跳转：1~9 对应屏幕 3x3 的九块区域。
+     *
+     * <b>竖屏</b>：1 左上、9 右下，与物理键盘布局一致。
+     * <b>横屏</b>：九宫格按当前屏幕旋转整体旋转，使“按哪个键就到屏幕哪个角”依然成立——
+     * ROTATION_90（设备顶朝左）变为 3/6/9 上、2/5/8 中、1/4/7 下；
+     * ROTATION_270（设备顶朝右）变为 7/4/1 上、8/5/2 中、9/6/3 下。
      *
      * 落点<b>严格是该格的几何中心，不参考任何控件</b>。
      *
@@ -626,11 +654,11 @@ public class FocusNavigationService extends AccessibilityService {
      * 光标落在哪就点哪，不需要任何“锁定”。
      */
     private void jumpToGrid(int keyCode) {
-        int index = gridIndexOf(keyCode);
-        if (index < 0) return;
+        int[] cell = gridCellOf(keyCode);
+        if (cell == null) return;
 
-        int col = index % 3;
-        int row = index / 3;
+        int col = cell[0];
+        int row = cell[1];
         // 用浮点算边界再取整，保证严格九等分（屏宽不能整除 3 时也不会让最后一格偏大）
         int w = screenRect.width();
         int h = screenRect.height();
@@ -642,25 +670,47 @@ public class FocusNavigationService extends AccessibilityService {
         cursorX = clamp((left + right) / 2, 1, w - 1);
         cursorY = clamp((top + bottom) / 2, 1, h - 1);
 
-        Log.d(TAG, "jumpToGrid key=" + (index + 1)
+        Log.d(TAG, "jumpToGrid key=" + KeyEvent.keyCodeToString(keyCode)
+                + " col=" + col + " row=" + row + " rot=" + screenRotation
                 + " cell=[" + left + "," + top + "][" + right + "," + bottom + "]"
                 + " -> (" + cursorX + "," + cursorY + ")");
 
         drawCursor();
     }
 
-    private static int gridIndexOf(int keyCode) {
+    /**
+     * 把数字键映射到屏幕九宫格的 (col,row)，col/row 均 0..2。返回 null 表示非数字键。
+     *
+     * 先取该键在<b>设备自然朝向</b>下的物理 (c,r)（1=(0,0) … 9=(2,2)，与键盘实物一致），
+     * 再按当前屏幕旋转投影到屏幕坐标。这样横屏下九宫格与方向键遵循同一套旋转，
+     * 不会出现“方向键转了、九宫格没转”的错位。
+     */
+    private int[] gridCellOf(int keyCode) {
+        int c, r;
         switch (keyCode) {
-            case KeyEvent.KEYCODE_1: return 0;
-            case KeyEvent.KEYCODE_2: return 1;
-            case KeyEvent.KEYCODE_3: return 2;
-            case KeyEvent.KEYCODE_4: return 3;
-            case KeyEvent.KEYCODE_5: return 4;
-            case KeyEvent.KEYCODE_6: return 5;
-            case KeyEvent.KEYCODE_7: return 6;
-            case KeyEvent.KEYCODE_8: return 7;
-            case KeyEvent.KEYCODE_9: return 8;
-            default: return -1;
+            case KeyEvent.KEYCODE_1: c = 0; r = 0; break;
+            case KeyEvent.KEYCODE_2: c = 1; r = 0; break;
+            case KeyEvent.KEYCODE_3: c = 2; r = 0; break;
+            case KeyEvent.KEYCODE_4: c = 0; r = 1; break;
+            case KeyEvent.KEYCODE_5: c = 1; r = 1; break;
+            case KeyEvent.KEYCODE_6: c = 2; r = 1; break;
+            case KeyEvent.KEYCODE_7: c = 0; r = 2; break;
+            case KeyEvent.KEYCODE_8: c = 1; r = 2; break;
+            case KeyEvent.KEYCODE_9: c = 2; r = 2; break;
+            default: return null;
+        }
+        switch (screenRotation) {
+            case Surface.ROTATION_90:
+                // 设备顶部朝左：屏 col = 物理 r，屏 row = 2 - 物理 c
+                //   -> 顶行 3/6/9，中行 2/5/8，底行 1/4/7
+                return new int[]{ r, 2 - c };
+            case Surface.ROTATION_270:
+                // 设备顶部朝右：屏 col = 2 - 物理 r，屏 row = 物理 c
+                //   -> 顶行 7/4/1，中行 8/5/2，底行 9/6/3
+                return new int[]{ 2 - r, c };
+            default:
+                // 竖屏（或 180°，后者少见且对 3x3 镜像无意义，按竖屏处理）
+                return new int[]{ c, r };
         }
     }
 
@@ -1136,7 +1186,7 @@ public class FocusNavigationService extends AccessibilityService {
             case KeyEvent.KEYCODE_DPAD_DOWN:
             case KeyEvent.KEYCODE_DPAD_LEFT:
             case KeyEvent.KEYCODE_DPAD_RIGHT:
-                return handleDirectionKey(event, directionOf(keyCode));
+                return handleDirectionKey(event, screenDirectionOf(keyCode));
 
             case KeyEvent.KEYCODE_0:
                 return handleZeroKey(event);
@@ -1515,6 +1565,51 @@ public class FocusNavigationService extends AccessibilityService {
             default:
                 return FocusNavigator.Direction.RIGHT;
         }
+    }
+
+    /**
+     * 把<b>物理</b>方向键映射成<b>屏幕</b>方向（参考当前 {@link #screenRotation}）。
+     *
+     * 竖屏：不重映射，物理上 = 屏幕上。
+     *
+     * 横屏时设备被旋转 90°，物理“上”指向的是屏幕的左 / 右而不是屏幕上方。
+     * 这里按当前旋转把物理方向投影到屏幕方向，使“按下上键、光标朝屏幕上方走”重新成立——
+     * 即用户拿横屏时，按哪个键光标就朝那键<b>面向的屏幕方向</b>走（与九宫格同一套旋转，避免错位）。
+     *
+     * <table>
+     * <tr><th>旋转</th><th>物理→屏幕</th></tr>
+     * <tr><td>ROTATION_90（设备顶朝左）</td>
+     *   <td>上→左，下→右，左→下，右→上</td></tr>
+     * <tr><td>ROTATION_270（设备顶朝右）</td>
+     *   <td>上→右，下→左，左→上，右→下</td></tr>
+     * </table>
+     *
+     * 拖拽（0+方向键）调用 {@link #swipeFromCursor} 时传入的也是这个屏幕方向，
+     * 所以横屏拖拽语义自动一致（上键=想看屏幕左边=手指向右滑）。
+     */
+    private FocusNavigator.Direction screenDirectionOf(int keyCode) {
+        FocusNavigator.Direction physical = directionOf(keyCode);
+        switch (screenRotation) {
+            case Surface.ROTATION_90:
+                switch (physical) {
+                    case UP:    return FocusNavigator.Direction.LEFT;
+                    case DOWN:  return FocusNavigator.Direction.RIGHT;
+                    case LEFT:  return FocusNavigator.Direction.DOWN;
+                    case RIGHT: return FocusNavigator.Direction.UP;
+                }
+                break;
+            case Surface.ROTATION_270:
+                switch (physical) {
+                    case UP:    return FocusNavigator.Direction.RIGHT;
+                    case DOWN:  return FocusNavigator.Direction.LEFT;
+                    case LEFT:  return FocusNavigator.Direction.UP;
+                    case RIGHT: return FocusNavigator.Direction.DOWN;
+                }
+                break;
+            default:
+                break;
+        }
+        return physical;
     }
 
     /**
