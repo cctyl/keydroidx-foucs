@@ -1,13 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 无障碍服务需要声明（系统自动授予，无需运行时请求） -->
+    <!-- 网络权限（用户反馈与日志上传） -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- 无障碍服务权限 -->
     <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" />
 
     <!--
-        包可见性（Android 11+ / targetSdk 30+）：黑名单页要列出所有带桌面入口的应用，
-        必须显式声明对 MAIN/LAUNCHER intent 的查询意图，否则 queryIntentActivities
-        只会返回本应用自己。
+        包可见性（Android 11+ / targetSdk 30+）：黑白名单页列出所有带桌面入口的应用，
+        必须显式声明对 MAIN/LAUNCHER intent 的查询意图
     -->
     <queries>
         <intent>
@@ -21,6 +24,7 @@
         android:allowBackup="true"
         android:label="@string/app_name"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.KeydroidxFocus">
 
         <activity
@@ -33,13 +37,13 @@
             </intent-filter>
         </activity>
 
-        <!-- 应用黑名单配置页：勾选的应用内关闭光标、按键全部放行 -->
+        <!-- 应用黑名单配置页 -->
         <activity
             android:name=".BlacklistActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="false" />
 
-        <!-- 应用白名单配置页：勾选的应用内才开启光标，其余应用按键全部放行 -->
+        <!-- 应用白名单配置页 -->
         <activity
             android:name=".WhitelistActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
