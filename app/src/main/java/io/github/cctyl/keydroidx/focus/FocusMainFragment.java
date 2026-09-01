@@ -141,7 +141,7 @@ public class FocusMainFragment extends NokiaListPageFragment {
             case ITEM_SERVICE_STATUS:
                 return "无障碍服务：" + (serviceOn ? "已开启" : "未开启 (点击开启)");
             case ITEM_NAV_SWITCH:
-                return "鼠标导航：" + (navOn ? "已启用" : "已停用");
+                return "原键鼠标：" + (navOn ? "已启用" : "已停用");
             case ITEM_MODE_SELECT:
                 return "生效模式：" + (isWhitelist ? "白名单模式" : "黑名单模式");
             case ITEM_APP_LIST:
@@ -153,7 +153,7 @@ public class FocusMainFragment extends NokiaListPageFragment {
             case ITEM_FEEDBACK:
                 return "问题反馈";
             case ITEM_ABOUT:
-                return "关于鼠标导航";
+                return "关于原键鼠标";
             default:
                 return "";
         }
@@ -194,9 +194,11 @@ public class FocusMainFragment extends NokiaListPageFragment {
                 return true;
             case ITEM_ABOUT:
                 NokiaAboutConfig config = NokiaAboutConfig.createDefault(requireContext())
-                        .setAppName("屏幕鼠标导航")
+                        .setAppName("原键鼠标")
                         .setVersionName("1.0.0")
-                        .setAuthor("KeydroidX Team")
+                        .setAuthor("cctyl")
+                        .setRepoUrl("https://github.com/cctyl/keydroidx-foucs")
+                        .setVideoUrl("https://www.bilibili.com/video/BV1WxMX6yEHX/")
                         .setDescription("专为现代按键功能机设计的屏幕虚拟光标与按键映射工具。\n\n" +
                                 "· 无障碍透明悬浮光标\n" +
                                 "· 方向键/连发移动 + 确认键坐标点击\n" +
@@ -214,7 +216,7 @@ public class FocusMainFragment extends NokiaListPageFragment {
         boolean next = !current;
         NavigationPrefs.setEnabled(requireContext(), next);
         refreshItemLabels();
-        Toast.makeText(requireContext(), next ? "鼠标导航已启用" : "鼠标导航已停用", Toast.LENGTH_SHORT).show();
+        Toast.makeText(requireContext(), next ? "原键鼠标已启用" : "原键鼠标已停用", Toast.LENGTH_SHORT).show();
     }
 
     private void showModeDialog() {
@@ -277,7 +279,7 @@ public class FocusMainFragment extends NokiaListPageFragment {
 
     @Override
     public String getPageTitle() {
-        return "鼠标导航";
+        return "原键鼠标";
     }
 
     @Override

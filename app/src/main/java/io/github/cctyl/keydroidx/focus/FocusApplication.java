@@ -8,7 +8,7 @@ import io.github.cctyl.nokia.common.log.NokiaLog;
 import io.github.cctyl.nokia.keycore.NokiaClient;
 
 /**
- * KeydroidX-Focus 全局 Application。
+ * 原键鼠标 / KeydroidXFocus 全局 Application。
  * 负责初始化 NokiaClient、日志收集系统以及用户意见反馈组件。
  */
 public class FocusApplication extends Application {
@@ -21,7 +21,7 @@ public class FocusApplication extends Application {
         NokiaClient.get(this);
 
         // 统一日志与崩溃捕获
-        NokiaLog.setTag("KeydroidX-Focus");
+        NokiaLog.setTag("KeydroidXFocus");
         NokiaLog.init(this);
         NokiaLog.installCrashHandler(this);
         NokiaLog.i("App", "FocusApplication onCreate");
@@ -31,7 +31,7 @@ public class FocusApplication extends Application {
                 new NokiaFeedbackConfig(
                         BuildConfig.FEEDBACK_UPLOAD_URL,
                         BuildConfig.FEEDBACK_SECRET_KEY,
-                        "KeydroidX-Focus",
+                        "KeydroidXFocus",
                         BuildConfig.VERSION_NAME,
                         null
                 )

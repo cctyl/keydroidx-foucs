@@ -4,7 +4,7 @@ setlocal
 REM ============================================================
 REM  Build debug APK.
 REM
-REM  Output: app\build\outputs\apk\debug\app-debug.apk
+REM  Output: app\build\outputs\apk\debug\KeydroidXFocus-v*.apk
 REM ============================================================
 
 set "ROOT=%~dp0"

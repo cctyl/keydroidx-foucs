@@ -19,7 +19,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "keydroidx-focus"
+rootProject.name = "KeydroidXFocus"
 include ':app'
 
 includeBuild('../keydroidx-core') {

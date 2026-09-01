@@ -5,7 +5,7 @@ REM ============================================================
 REM  Build release APK (skip lint, as lint breaks the
 REM  release build), then open the output folder in Explorer.
 REM
-REM  Output: app\build\outputs\apk\release\app-release.apk
+REM  Output: app\build\outputs\apk\release\KeydroidXFocus-v*.apk
 REM
 REM  Usage: build_release.bat
 REM ============================================================

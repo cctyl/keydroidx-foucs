@@ -12,7 +12,7 @@
         android:layout_alignParentTop="true"
         android:layout_marginStart="8dp"
         android:layout_marginTop="4dp"
-        android:text="鼠标导航设置"
+        android:text="原键鼠标设置"
         android:textColor="#FFFFFF"
         android:textSize="13sp"
         android:textStyle="bold" />

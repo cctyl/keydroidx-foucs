@@ -1756,7 +1756,7 @@ public class FocusNavigationService extends AccessibilityService {
             toast("光标已隐藏，按键已放行；星号+井号恢复");
         } else {
             refreshCurrentWindow();
-            toast("鼠标导航已恢复");
+            toast("原键鼠标已恢复");
         }
     }
 
