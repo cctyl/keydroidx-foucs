@@ -38,6 +38,12 @@
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="false" />
 
+        <!-- 应用白名单配置页：勾选的应用内才开启光标，其余应用按键全部放行 -->
+        <activity
+            android:name=".WhitelistActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="false" />
+
         <!-- 焦点导航无障碍服务 -->
         <service
             android:name=".FocusNavigationService"

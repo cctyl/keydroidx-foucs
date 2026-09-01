@@ -286,12 +286,18 @@ public class FocusNavigationService extends AccessibilityService {
                         } else {
                             hideOverlay("pref-disabled");
                         }
-                    } else if (NavigationPrefs.KEY_BLACKLIST.equals(key)) {
-                        // 黑名单实时生效：当前正处于黑名单应用则立即清场并隐藏光标；
-                        // 不在的话无需动作，之后的刷新 / 按键自会按新名单判断。
-                        if (isBlacklistedApp()) {
+                    } else if (NavigationPrefs.KEY_BLACKLIST.equals(key)
+                            || NavigationPrefs.KEY_WHITELIST.equals(key)
+                            || NavigationPrefs.KEY_MODE.equals(key)) {
+                        // 名单 / 模式实时生效：
+                        // - 当前应用在新规则下应被关闭 → 立即清场并隐藏光标；
+                        // - 当前应用在新规则下应被开启 → 触发一次刷新，把光标点出来
+                        //   （否则要等下一次事件 / 按键才会重新显示）。
+                        if (isAppSuppressed()) {
                             releaseAllKeys();
-                            hideOverlay("blacklist-changed:" + currentPackage);
+                            hideOverlay("listmode-changed:" + currentPackage);
+                        } else {
+                            scheduleRefresh(0);
                         }
                     }
                 }
@@ -540,7 +546,7 @@ public class FocusNavigationService extends AccessibilityService {
         if (!imeShowing) {
             calibrateEditMode();
         }
-        if (!NavigationPrefs.isEnabled(this) || isOurOwnApp() || isBlacklistedApp()) {
+        if (!NavigationPrefs.isEnabled(this) || isOurOwnApp() || isAppSuppressed()) {
             hideOverlay("refresh-hide:" + currentPackage);
             return;
         }
@@ -799,9 +805,9 @@ public class FocusNavigationService extends AccessibilityService {
             hideOverlay("ownApp:" + currentPackage);
             return;
         }
-        if (isBlacklistedApp()) {
-            // 切进黑名单应用：立即隐藏光标，不等刷新防抖（事件包名已更新为前台应用）
-            hideOverlay("blacklist:" + currentPackage);
+        if (isAppSuppressed()) {
+            // 切进名单内应关闭的应用：立即隐藏光标，不等刷新防抖（事件包名已更新为前台应用）
+            hideOverlay("suppressed:" + currentPackage);
             return;
         }
         if (isInputMode()) {
@@ -829,9 +835,14 @@ public class FocusNavigationService extends AccessibilityService {
         return currentPackage != null && currentPackage.equals(getPackageName());
     }
 
-    /** 当前前台应用是否在用户配置的黑名单里（黑名单应用内光标完全不工作） */
-    private boolean isBlacklistedApp() {
-        return NavigationPrefs.isBlacklisted(this, currentPackage);
+    /**
+     * 当前前台应用在当前名单模式下是否应当被关闭（光标不显示、按键全部放行）。
+     *
+     * 黑名单模式：在黑名单里 → 关闭；
+     * 白名单模式：不在白名单里 → 关闭（包名未知也按“不在白名单”处理）。
+     */
+    private boolean isAppSuppressed() {
+        return NavigationPrefs.isAppSuppressed(this, currentPackage);
     }
 
     /**
@@ -1098,7 +1109,7 @@ public class FocusNavigationService extends AccessibilityService {
         // 输入态用 isInputMode() 而非 editMode：即使 editMode 被意外清掉，
         // 只要输入法窗口还弹着，按键就必须继续放行——否则选词/确认会被
         // 服务抢走，在旧光标位置派发点击，打断整个输入流程。
-        if (isOurOwnApp() || isInputMode() || isBlacklistedApp()) {
+        if (isOurOwnApp() || isInputMode() || isAppSuppressed()) {
             releaseAllKeys();
             return false;
         }

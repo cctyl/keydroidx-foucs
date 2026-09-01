@@ -8,6 +8,7 @@ import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CompoundButton;
+import android.widget.RadioGroup;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -19,7 +20,8 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvServiceStatus;
     private Switch swEnabled;
     private Button btnOpenSettings;
-    private Button btnBlacklist;
+    private Button btnAppList;
+    private RadioGroup rgMode;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -29,7 +31,8 @@ public class MainActivity extends AppCompatActivity {
         tvServiceStatus = findViewById(R.id.tvServiceStatus);
         swEnabled = findViewById(R.id.swEnabled);
         btnOpenSettings = findViewById(R.id.btnOpenSettings);
-        btnBlacklist = findViewById(R.id.btnBlacklist);
+        btnAppList = findViewById(R.id.btnAppList);
+        rgMode = findViewById(R.id.rgMode);
 
         btnOpenSettings.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -39,11 +42,32 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        btnBlacklist.setOnClickListener(new View.OnClickListener() {
+        btnAppList.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                // 配置应用黑名单：黑名单 App 内不显示光标、按键全部放行
-                startActivity(new Intent(MainActivity.this, BlacklistActivity.class));
+                // 按当前模式打开对应名单配置页
+                if (NavigationPrefs.isWhitelistMode(MainActivity.this)) {
+                    startActivity(new Intent(MainActivity.this, WhitelistActivity.class));
+                } else {
+                    startActivity(new Intent(MainActivity.this, BlacklistActivity.class));
+                }
+            }
+        });
+
+        // 切换模式：两套数据互相独立，只切"生效"标志，不搬动勾选。
+        rgMode.setOnCheckedChangeListener(new RadioGroup.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(RadioGroup group, int checkedId) {
+                String mode = checkedId == R.id.rbWhitelistMode
+                        ? NavigationPrefs.MODE_WHITELIST
+                        : NavigationPrefs.MODE_BLACKLIST;
+                NavigationPrefs.setMode(MainActivity.this, mode);
+                updateAppListButton();
+                Toast.makeText(MainActivity.this,
+                        mode == NavigationPrefs.MODE_WHITELIST
+                                ? "已切换到白名单模式"
+                                : "已切换到黑名单模式",
+                        Toast.LENGTH_SHORT).show();
             }
         });
 
@@ -75,6 +99,37 @@ public class MainActivity extends AppCompatActivity {
         // 服务没开时强制把开关视作不可用
         swEnabled.setEnabled(serviceOn);
         swEnabled.setChecked(serviceOn && navOn);
+
+        // 同步模式选择：去掉监听后再设，避免 onResume 回调触发
+        rgMode.setOnCheckedChangeListener(null);
+        rgMode.check(NavigationPrefs.isWhitelistMode(this)
+                ? R.id.rbWhitelistMode
+                : R.id.rbBlacklistMode);
+        rgMode.setOnCheckedChangeListener(new RadioGroup.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(RadioGroup group, int checkedId) {
+                String mode = checkedId == R.id.rbWhitelistMode
+                        ? NavigationPrefs.MODE_WHITELIST
+                        : NavigationPrefs.MODE_BLACKLIST;
+                NavigationPrefs.setMode(MainActivity.this, mode);
+                updateAppListButton();
+                Toast.makeText(MainActivity.this,
+                        mode == NavigationPrefs.MODE_WHITELIST
+                                ? "已切换到白名单模式"
+                                : "已切换到黑名单模式",
+                        Toast.LENGTH_SHORT).show();
+            }
+        });
+        updateAppListButton();
+    }
+
+    /** 按当前模式刷新"打开名单"按钮的文字 */
+    private void updateAppListButton() {
+        if (NavigationPrefs.isWhitelistMode(this)) {
+            btnAppList.setText(R.string.open_app_whitelist);
+        } else {
+            btnAppList.setText(R.string.open_app_blacklist);
+        }
     }
 
     /** 通过 Settings.Secure 检查本无障碍服务是否已被用户启用 */
