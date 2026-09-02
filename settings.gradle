@@ -26,5 +26,6 @@ includeBuild('../keydroidx-core') {
     dependencySubstitution {
         substitute module('io.github.cctyl.nokia:nokia-key-core') using project(':nokia-key-core')
         substitute module('io.github.cctyl.nokia:nokia-common') using project(':nokia-common')
+        substitute module('io.github.cctyl.nokia:nokia-mini-shizuku') using project(':nokia-mini-shizuku')
     }
 }

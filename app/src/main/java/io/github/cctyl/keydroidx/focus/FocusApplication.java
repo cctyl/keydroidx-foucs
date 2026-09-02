@@ -36,5 +36,8 @@ public class FocusApplication extends Application {
                         null
                 )
         );
+
+        // 初始化 MiniShizuku（用于 API < 24 上的 shell 模拟手势）
+        io.github.cctyl.nokia.shizuku.MiniShizuku.init(this);
     }
 }

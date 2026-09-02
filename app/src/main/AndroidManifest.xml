@@ -5,8 +5,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- 无障碍服务权限 -->
-    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" />
+    <!-- 悬浮窗权限（API <= 25 悬浮光标使用 TYPE_SYSTEM_ALERT） -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!--
         包可见性（Android 11+ / targetSdk 30+）：黑白名单页列出所有带桌面入口的应用，

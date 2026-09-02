@@ -101,4 +101,5 @@ dependencies {
     implementation 'androidx.recyclerview:recyclerview:1.2.1'
     implementation 'io.github.cctyl.nokia:nokia-key-core:1.0.0'
     implementation 'io.github.cctyl.nokia:nokia-common:1.0.0'
+    implementation 'io.github.cctyl.nokia:nokia-mini-shizuku:1.0.0'
 }

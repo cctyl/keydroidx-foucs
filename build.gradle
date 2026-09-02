@@ -9,6 +9,6 @@ task clean(type: Delete) {
 
 ext {
     COMPILE_SDK = 34
-    MIN_SDK = 27   // TYPE_ACCESSIBILITY_OVERLAY 需要 API 27+
+    MIN_SDK = 19
     TARGET_SDK = 34
 }

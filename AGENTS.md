@@ -105,7 +105,7 @@ adb logcat | findstr FocusNavigationService                # 实时日志（Powe
 
 - 装完若 `onKeyEvent` 失灵：先去系统设置把无障碍服务关掉再开（旧绑定可能还在）。
 - **无单测**（`FocusNavigator` 是纯算法，最适合补测试；运行 `./gradlew.bat testDebugUnitTest`，单类用 `--tests "..."`）。
-- `minSdk 27`：`TYPE_ACCESSIBILITY_OVERLAY` 需要 26+，取 27 稳妥。
+- `minSdk 19`：兼容 Android 4.4+，API 26+ 使用 `TYPE_ACCESSIBILITY_OVERLAY`，API 19-25 使用 `TYPE_SYSTEM_ALERT`；手势在 API 24+ 使用 `dispatchGesture`，API 19-23 使用 MiniShizuku 模拟 input 命令。
 - **`密钥绝不入库`**：`local.properties` / `gradle.properties` / `keystore.properties` 被 gitignore，含 JDK17 路径与 `test.jks` 签名凭据，**不要提交**；`test.jks` 本身也不在版本库内（`*.jks` 已忽略），只留在本地磁盘供构建使用。签名配置从 `keystore.properties`（优先）或 `gradle.properties` 的 `RELEASE_*` 读取，两者都缺失时 debug 构建回退 AGP 默认 debug 签名（模板见 `keystore.properties.example`）。
 
 ## 7. 关键可调参数

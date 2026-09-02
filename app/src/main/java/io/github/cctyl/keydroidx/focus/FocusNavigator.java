@@ -1,6 +1,7 @@
 package io.github.cctyl.keydroidx.focus;
 
 import android.graphics.Rect;
+import android.os.Build;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import java.util.ArrayList;
@@ -312,14 +313,22 @@ public final class FocusNavigator {
     private static boolean isInteractive(AccessibilityNodeInfo n, boolean relaxed) {
         if (n.isClickable() || n.isLongClickable() || n.isCheckable()) return true;
         if (relaxed && n.isFocusable()) return true;
-        List<AccessibilityNodeInfo.AccessibilityAction> actions = n.getActionList();
-        if (actions != null) {
-            for (AccessibilityNodeInfo.AccessibilityAction a : actions) {
-                int id = a.getId();
-                if (id == AccessibilityNodeInfo.ACTION_CLICK
-                        || id == AccessibilityNodeInfo.ACTION_LONG_CLICK) {
-                    return true;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            List<AccessibilityNodeInfo.AccessibilityAction> actions = n.getActionList();
+            if (actions != null) {
+                for (AccessibilityNodeInfo.AccessibilityAction a : actions) {
+                    int id = a.getId();
+                    if (id == AccessibilityNodeInfo.ACTION_CLICK
+                            || id == AccessibilityNodeInfo.ACTION_LONG_CLICK) {
+                        return true;
+                    }
                 }
+            }
+        } else {
+            int actions = n.getActions();
+            if ((actions & AccessibilityNodeInfo.ACTION_CLICK) != 0
+                    || (actions & AccessibilityNodeInfo.ACTION_LONG_CLICK) != 0) {
+                return true;
             }
         }
         return false;
@@ -476,12 +485,20 @@ public final class FocusNavigator {
     }
 
     private static boolean hasScrollAction(AccessibilityNodeInfo n) {
-        List<AccessibilityNodeInfo.AccessibilityAction> actions = n.getActionList();
-        if (actions == null) return false;
-        for (AccessibilityNodeInfo.AccessibilityAction a : actions) {
-            int id = a.getId();
-            if (id == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-                    || id == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            List<AccessibilityNodeInfo.AccessibilityAction> actions = n.getActionList();
+            if (actions == null) return false;
+            for (AccessibilityNodeInfo.AccessibilityAction a : actions) {
+                int id = a.getId();
+                if (id == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                        || id == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) {
+                    return true;
+                }
+            }
+        } else {
+            int actions = n.getActions();
+            if ((actions & AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) != 0
+                    || (actions & AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) != 0) {
                 return true;
             }
         }

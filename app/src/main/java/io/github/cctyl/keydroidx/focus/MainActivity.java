@@ -1,7 +1,10 @@
 package io.github.cctyl.keydroidx.focus;
 
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -19,17 +22,31 @@ public class MainActivity extends NokiaBaseActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        // 先于 super.onCreate 判定，避免先绘制本应用界面再跳转造成闪烁
+        super.onCreate(savedInstanceState);
+
+        // 仅在无障碍服务未开启时跳转系统无障碍设置页引导用户开启
         if (!isAccessibilityServiceEnabled(this)) {
             startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
             finish();
             return;
         }
-        super.onCreate(savedInstanceState);
+
+        // API 23~25（Android 6.0 ~ 7.1）悬浮光标使用 TYPE_SYSTEM_ALERT，需要运行时悬浮窗授权
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            if (!Settings.canDrawOverlays(this)) {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+            }
+        }
     }
 
     @Override
     protected void onInitViews() {
+        if (!isAccessibilityServiceEnabled(this)) {
+            return;
+        }
         if (getSupportFragmentManager().findFragmentById(R.id.midPanel) == null) {
             getSupportFragmentManager().beginTransaction()
                     .replace(R.id.midPanel, new FocusMainFragment())
@@ -46,9 +63,11 @@ public class MainActivity extends NokiaBaseActivity {
                 context.getContentResolver(),
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
         if (TextUtils.isEmpty(enabled)) return false;
-        String wanted = context.getPackageName() + "/" + FocusNavigationService.class.getName();
+        ComponentName wanted = new ComponentName(context, FocusNavigationService.class);
         for (String s : enabled.split(":")) {
-            if (s != null && s.equalsIgnoreCase(wanted)) return true;
+            if (TextUtils.isEmpty(s)) continue;
+            ComponentName cn = ComponentName.unflattenFromString(s.trim());
+            if (wanted.equals(cn)) return true;
         }
         return false;
     }

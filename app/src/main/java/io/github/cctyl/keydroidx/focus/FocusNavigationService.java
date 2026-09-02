@@ -1,8 +1,9 @@
 package io.github.cctyl.keydroidx.focus;
 
+import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
-import android.accessibilityservice.GestureDescription;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Path;
@@ -241,6 +242,9 @@ public class FocusNavigationService extends AccessibilityService {
     /** 上一次真正遍历过节点树的时刻 */
     private long lastCandidateScan;
 
+    /** 手势派发策略（API 24+ 使用 dispatchGesture，API 19-23 使用 Shell input 命令） */
+    private GesturePerformer gesturePerformer;
+
     // ------------------------------------------------- 方向键 + 确认键 = 拖拽滑动
     private Runnable dragRepeatRunnable;
     /** 本次拖拽已滑动的次数，仅用于日志 */
@@ -335,10 +339,14 @@ public class FocusNavigationService extends AccessibilityService {
         dumpCapabilityFields(info);
         setCapability(info, "canRetrieveWindowContent", true);
         setCapability(info, "canRequestFilterKeyEvents", true);
-        setCapability(info, "canPerformGestures", true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            setCapability(info, "canPerformGestures", true);
+        }
         patchCapabilities(info);
 
-        info.flags |= AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            info.flags |= AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+        }
         // 关键：不申请这个 flag，onKeyEvent 永远不会被回调
         info.flags |= AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS;
         info.eventTypes |= AccessibilityEvent.TYPE_VIEW_FOCUSED;
@@ -346,6 +354,13 @@ public class FocusNavigationService extends AccessibilityService {
 
         Log.d(TAG, "serviceInfo applied, capabilities=" + info.getCapabilities()
                 + " flags=" + Integer.toHexString(info.flags));
+
+        // 初始化手势派发器（API 24+ 使用 dispatchGesture，API 19-23 使用 Shell input 命令）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            gesturePerformer = new DispatchGesturePerformer(this);
+        } else {
+            gesturePerformer = new ShellGesturePerformer();
+        }
 
         updateScreenRect();
         initOverlay();
@@ -422,6 +437,7 @@ public class FocusNavigationService extends AccessibilityService {
      * （实测上报 41 = 取窗口内容|放大镜|截图，缺 4=按键过滤 与 16=手势）。
      * 这里按位补上，拿不到就放弃，不影响主流程。
      */
+    @SuppressLint("SoonBlockedPrivateApi")
     private static void patchCapabilities(AccessibilityServiceInfo info) {
         final int CAP_KEY_EVENTS = 0x00000004;
         final int CAP_GESTURES = 0x00000010;
@@ -430,7 +446,10 @@ public class FocusNavigationService extends AccessibilityService {
                     AccessibilityServiceInfo.class.getDeclaredField("mCapabilities");
             f.setAccessible(true);
             int caps = f.getInt(info);
-            int patched = caps | CAP_KEY_EVENTS | CAP_GESTURES;
+            int patched = caps | CAP_KEY_EVENTS;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                patched |= CAP_GESTURES;
+            }
             f.setInt(info, patched);
             Log.d(TAG, "patchCapabilities " + caps + " -> " + patched);
         } catch (Throwable t) {
@@ -494,8 +513,12 @@ public class FocusNavigationService extends AccessibilityService {
         overlay = new CursorOverlay(this);
 
         overlayParams = new WindowManager.LayoutParams();
-        // 无障碍服务专用窗口类型：不需要 SYSTEM_ALERT_WINDOW 悬浮窗权限
-        overlayParams.type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            overlayParams.type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY;
+        } else {
+            // API 19-25: 使用 TYPE_SYSTEM_ALERT（需要 SYSTEM_ALERT_WINDOW 权限）
+            overlayParams.type = WindowManager.LayoutParams.TYPE_SYSTEM_ALERT;
+        }
         overlayParams.format = PixelFormat.TRANSLUCENT;
         // 必须显式指定 gravity：不同 ROM 对默认值的处理不一致，否则整块画布会偏移
         overlayParams.gravity = Gravity.TOP | Gravity.START;
@@ -545,7 +568,10 @@ public class FocusNavigationService extends AccessibilityService {
         handler.post(new Runnable() {
             @Override
             public void run() {
-                if (overlay == null) return;
+                if (overlay == null) {
+                    initOverlay();
+                    if (overlay == null) return;
+                }
                 overlay.update(cx, cy);
                 // 用户用星号+井号键临时隐藏了光标：坐标照常更新（恢复时就是最新位置），
                 // 但不把画布设为可见。页面刷新 / 连发移动都不会把光标“顶”出来。
@@ -740,14 +766,13 @@ public class FocusNavigationService extends AccessibilityService {
 
     /** 按屏幕坐标派发一次点击手势 */
     private boolean clickByGesture(int x, int y) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
         if (x <= 0 || y <= 0) return false;
-        Path path = new Path();
-        path.moveTo(x, y);
-        GestureDescription.StrokeDescription stroke =
-                new GestureDescription.StrokeDescription(path, 0, 60);
-        GestureDescription gd = new GestureDescription.Builder().addStroke(stroke).build();
-        return dispatchGesture(gd, null, null);
+        Log.d(TAG, "click at (" + x + "," + y + ")");
+        if (gesturePerformer != null) {
+            gesturePerformer.click(x, y);
+            return true;
+        }
+        return false;
     }
 
     /** 长按确认键：在光标所在坐标长按（与点击同理，所见即所点） */
@@ -761,14 +786,13 @@ public class FocusNavigationService extends AccessibilityService {
     }
 
     private boolean longPressByGesture(int x, int y) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
         if (x <= 0 || y <= 0) return false;
-        Path path = new Path();
-        path.moveTo(x, y);
-        GestureDescription.StrokeDescription stroke =
-                new GestureDescription.StrokeDescription(path, 0, 700);
-        GestureDescription gd = new GestureDescription.Builder().addStroke(stroke).build();
-        return dispatchGesture(gd, null, null);
+        Log.d(TAG, "longPress at (" + x + "," + y + ")");
+        if (gesturePerformer != null) {
+            gesturePerformer.longClick(x, y, 700);
+            return true;
+        }
+        return false;
     }
 
     private void toast(final String msg) {
@@ -1044,6 +1068,20 @@ public class FocusNavigationService extends AccessibilityService {
      * 这里按 Z 序从上层往下找：优先已获得焦点的 APPLICATION 窗口，否则取最上层的那个。
      */
     private AccessibilityNodeInfo getFocusableRoot() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            AccessibilityNodeInfo root = findFocusableRootFromWindows();
+            if (root != null) return root;
+        }
+
+        try {
+            return getRootInActiveWindow();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+    private AccessibilityNodeInfo findFocusableRootFromWindows() {
         List<AccessibilityWindowInfo> windows;
         try {
             windows = getWindows();
@@ -1089,12 +1127,7 @@ public class FocusNavigationService extends AccessibilityService {
             } catch (Exception ignored) {
             }
         }
-
-        try {
-            return getRootInActiveWindow();
-        } catch (Exception e) {
-            return null;
-        }
+        return null;
     }
 
     private String resolveForegroundPackage() {
@@ -1486,8 +1519,6 @@ public class FocusNavigationService extends AccessibilityService {
      * 否则系统会把这个手势判成点击而不是滑动。
      */
     private boolean swipeFromCursor(FocusNavigator.Direction dir, float ratio, long durationMs) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
-
         int w = screenRect.width();
         int h = screenRect.height();
         if (w <= 0 || h <= 0) return false;
@@ -1530,13 +1561,11 @@ public class FocusNavigationService extends AccessibilityService {
         }
 
         Log.v(TAG, "swipe (" + x1 + "," + y1 + ")->(" + x2 + "," + y2 + ") " + durationMs + "ms");
-        Path path = new Path();
-        path.moveTo(x1, y1);
-        path.lineTo(x2, y2);
-        GestureDescription.StrokeDescription stroke =
-                new GestureDescription.StrokeDescription(path, 0, durationMs);
-        GestureDescription gd = new GestureDescription.Builder().addStroke(stroke).build();
-        return dispatchGesture(gd, null, null);
+        if (gesturePerformer != null) {
+            gesturePerformer.swipe(x1, y1, x2, y2, durationMs);
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -1778,6 +1807,10 @@ public class FocusNavigationService extends AccessibilityService {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        if (gesturePerformer != null) {
+            gesturePerformer.onDestroy();
+            gesturePerformer = null;
+        }
         handler.removeCallbacksAndMessages(null);
         NavigationPrefs.unregisterListener(this, prefListener);
         if (overlay != null && windowManager != null) {
