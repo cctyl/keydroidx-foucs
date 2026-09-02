@@ -9,6 +9,8 @@ import android.os.Bundle;
 import android.provider.Settings;
 import android.text.TextUtils;
 
+import androidx.annotation.NonNull;
+
 import io.github.cctyl.nokia.common.R;
 import io.github.cctyl.nokia.keycore.ui.NokiaBaseActivity;
 
@@ -40,6 +42,33 @@ public class MainActivity extends NokiaBaseActivity {
                 startActivity(intent);
             }
         }
+
+        // 检查并申请通知权限，保障后台无障碍前台服务保活稳定运行
+        if (!FocusNotificationHelper.isNotificationEnabled(this)) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                FocusNotificationHelper.requestNotificationPermission(this);
+            }
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        FocusMainFragment fragment = (FocusMainFragment) getSupportFragmentManager().findFragmentById(R.id.midPanel);
+        if (fragment != null) {
+            fragment.refreshItemLabels();
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == FocusNotificationHelper.REQ_CODE_NOTIFICATION_PERMISSION) {
+            FocusMainFragment fragment = (FocusMainFragment) getSupportFragmentManager().findFragmentById(R.id.midPanel);
+            if (fragment != null) {
+                fragment.refreshItemLabels();
+            }
+        }
     }
 
     @Override
@@ -58,7 +87,7 @@ public class MainActivity extends NokiaBaseActivity {
     /**
      * 判定本应用的 {@link FocusNavigationService} 是否已在系统无障碍设置里被开启。
      */
-    private static boolean isAccessibilityServiceEnabled(Context context) {
+    public static boolean isAccessibilityServiceEnabled(Context context) {
         String enabled = Settings.Secure.getString(
                 context.getContentResolver(),
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);

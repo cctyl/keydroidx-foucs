@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- 网络权限（用户反馈与日志上传） -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -7,6 +8,13 @@
 
     <!-- 悬浮窗权限（API <= 25 悬浮光标使用 TYPE_SYSTEM_ALERT） -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- 前台服务与保活通知权限 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
+        tools:targetApi="34" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!--
         包可见性（Android 11+ / targetSdk 30+）：黑白名单页列出所有带桌面入口的应用，
@@ -55,7 +63,9 @@
             android:name=".FocusNavigationService"
             android:exported="false"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:label="@string/service_label">
+            android:label="@string/service_label"
+            android:foregroundServiceType="specialUse"
+            tools:targetApi="34">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
@@ -63,6 +73,10 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keep mouse cursor service running in background"
+                tools:targetApi="34" />
         </service>
 
     </application>

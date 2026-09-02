@@ -297,10 +297,13 @@ public class FocusNavigationService extends AccessibilityService {
                 @Override
                 public void onSharedPreferenceChanged(SharedPreferences sp, String key) {
                     if (NavigationPrefs.KEY_ENABLED.equals(key)) {
-                        if (NavigationPrefs.isEnabled(FocusNavigationService.this)) {
+                        boolean enabled = NavigationPrefs.isEnabled(FocusNavigationService.this);
+                        if (enabled) {
                             scheduleRefresh(WINDOW_READY_DELAY_MS);
+                            FocusNotificationHelper.updateNotification(FocusNavigationService.this, "屏幕光标服务运行中");
                         } else {
                             hideOverlay("pref-disabled");
+                            FocusNotificationHelper.updateNotification(FocusNavigationService.this, "原键鼠标已停用");
                         }
                     } else if (NavigationPrefs.KEY_BLACKLIST.equals(key)
                             || NavigationPrefs.KEY_WHITELIST.equals(key)
@@ -361,6 +364,10 @@ public class FocusNavigationService extends AccessibilityService {
         } else {
             gesturePerformer = new ShellGesturePerformer();
         }
+
+        // 启动前台服务保活通知
+        FocusNotificationHelper.startForegroundSafe(this,
+                NavigationPrefs.isEnabled(this) ? "屏幕光标服务运行中" : "原键鼠标已停用");
 
         updateScreenRect();
         initOverlay();
@@ -1783,9 +1790,11 @@ public class FocusNavigationService extends AccessibilityService {
             heldDirection = null;
             hideOverlay("user-toggle");
             toast("光标已隐藏，按键已放行；星号+井号恢复");
+            FocusNotificationHelper.updateNotification(this, "屏幕光标已挂起 (按*+#恢复)");
         } else {
             refreshCurrentWindow();
             toast("原键鼠标已恢复");
+            FocusNotificationHelper.updateNotification(this, "屏幕光标服务运行中");
         }
     }
 
@@ -1807,6 +1816,7 @@ public class FocusNavigationService extends AccessibilityService {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        FocusNotificationHelper.stopForegroundSafe(this);
         if (gesturePerformer != null) {
             gesturePerformer.onDestroy();
             gesturePerformer = null;

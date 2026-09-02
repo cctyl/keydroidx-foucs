@@ -31,16 +31,18 @@ import io.github.cctyl.nokia.keycore.ui.NokiaFeedbackActivity;
 public class FocusMainFragment extends NokiaListPageFragment {
 
     private static final int ITEM_SERVICE_STATUS = 0;
-    private static final int ITEM_NAV_SWITCH = 1;
-    private static final int ITEM_MODE_SELECT = 2;
-    private static final int ITEM_APP_LIST = 3;
-    private static final int ITEM_HELP = 4;
-    private static final int ITEM_FEEDBACK = 5;
-    private static final int ITEM_ABOUT = 6;
-    private static final int TOTAL_ITEMS = 7;
+    private static final int ITEM_NOTIFICATION = 1;
+    private static final int ITEM_NAV_SWITCH = 2;
+    private static final int ITEM_MODE_SELECT = 3;
+    private static final int ITEM_APP_LIST = 4;
+    private static final int ITEM_HELP = 5;
+    private static final int ITEM_FEEDBACK = 6;
+    private static final int ITEM_ABOUT = 7;
+    private static final int TOTAL_ITEMS = 8;
 
     private final String[] itemIcons = new String[]{
             NokiaIcons.SETTINGS,
+            NokiaIcons.NOTIFICATIONS,
             NokiaIcons.POWER_SETTINGS,
             NokiaIcons.SORT,
             NokiaIcons.APPS,
@@ -122,7 +124,7 @@ public class FocusMainFragment extends NokiaListPageFragment {
         refreshItemLabels();
     }
 
-    private void refreshItemLabels() {
+    public void refreshItemLabels() {
         if (tvNames == null) return;
         for (int i = 0; i < tvNames.length; i++) {
             if (tvNames[i] != null) {
@@ -134,12 +136,15 @@ public class FocusMainFragment extends NokiaListPageFragment {
     private String getItemDisplayName(int index) {
         if (getContext() == null) return "";
         boolean serviceOn = isAccessibilityServiceEnabled(requireContext());
+        boolean notifOn = FocusNotificationHelper.isNotificationEnabled(requireContext());
         boolean navOn = NavigationPrefs.isEnabled(requireContext());
         boolean isWhitelist = NavigationPrefs.isWhitelistMode(requireContext());
 
         switch (index) {
             case ITEM_SERVICE_STATUS:
                 return "无障碍服务：" + (serviceOn ? "已开启" : "未开启 (点击开启)");
+            case ITEM_NOTIFICATION:
+                return "通知与保活：" + (notifOn ? "已开启" : "未开启 (点击开启)");
             case ITEM_NAV_SWITCH:
                 return "原键鼠标：" + (navOn ? "已启用" : "已停用");
             case ITEM_MODE_SELECT:
@@ -165,6 +170,13 @@ public class FocusMainFragment extends NokiaListPageFragment {
         switch (focusIndex) {
             case ITEM_SERVICE_STATUS:
                 startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                return true;
+            case ITEM_NOTIFICATION:
+                if (FocusNotificationHelper.isNotificationEnabled(requireContext())) {
+                    Toast.makeText(requireContext(), "通知与保活权限已开启", Toast.LENGTH_SHORT).show();
+                } else {
+                    FocusNotificationHelper.requestNotificationPermission(requireActivity());
+                }
                 return true;
             case ITEM_NAV_SWITCH:
                 toggleNavSwitch();
@@ -239,15 +251,7 @@ public class FocusMainFragment extends NokiaListPageFragment {
     }
 
     private boolean isAccessibilityServiceEnabled(Context context) {
-        String enabled = Settings.Secure.getString(
-                context.getContentResolver(),
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-        if (TextUtils.isEmpty(enabled)) return false;
-        String wanted = context.getPackageName() + "/" + FocusNavigationService.class.getName();
-        for (String s : enabled.split(":")) {
-            if (s != null && s.equalsIgnoreCase(wanted)) return true;
-        }
-        return false;
+        return MainActivity.isAccessibilityServiceEnabled(context);
     }
 
     private View spaceView(int w, int h) {
