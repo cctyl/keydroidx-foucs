@@ -8,6 +8,7 @@ if (localPropertiesFile.exists()) {
     localPropertiesFile.withInputStream { localProperties.load(it) }
 }
 def feedbackUrl = localProperties.getProperty('FEEDBACK_UPLOAD_URL', 'http://127.0.0.1:9421/upload')
+def installUrl = localProperties.getProperty('FEEDBACK_INSTALL_URL', '')
 def feedbackKey = localProperties.getProperty('FEEDBACK_SECRET_KEY', '')
 
 def localProps = new Properties()
@@ -52,6 +53,7 @@ android {
         versionName "1.0"
 
         buildConfigField "String", "FEEDBACK_UPLOAD_URL", "\"${feedbackUrl}\""
+        buildConfigField "String", "FEEDBACK_INSTALL_URL", "\"${installUrl}\""
         buildConfigField "String", "FEEDBACK_SECRET_KEY", "\"${feedbackKey}\""
     }
 

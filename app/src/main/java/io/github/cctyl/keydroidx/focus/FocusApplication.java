@@ -4,6 +4,7 @@ import android.app.Application;
 
 import io.github.cctyl.nokia.common.feedback.NokiaFeedback;
 import io.github.cctyl.nokia.common.feedback.NokiaFeedbackConfig;
+import io.github.cctyl.nokia.common.feedback.NokiaInstall;
 import io.github.cctyl.nokia.common.log.NokiaLog;
 import io.github.cctyl.nokia.keycore.NokiaClient;
 
@@ -26,16 +27,19 @@ public class FocusApplication extends Application {
         NokiaLog.installCrashHandler(this);
         NokiaLog.i("App", "FocusApplication onCreate");
 
-        // 初始化意见反馈组件
+        // 初始化意见反馈 + 安装统计组件（共用同一份配置）
         NokiaFeedback.init(
                 new NokiaFeedbackConfig(
                         BuildConfig.FEEDBACK_UPLOAD_URL,
+                        BuildConfig.FEEDBACK_INSTALL_URL,
                         BuildConfig.FEEDBACK_SECRET_KEY,
                         "KeydroidXFocus",
                         BuildConfig.VERSION_NAME,
                         null
                 )
         );
+        // 首次安装 / 版本升级时自动上报一次设备信息（后台、幂等、静默）
+        NokiaInstall.reportOnce(this);
 
         // 初始化 MiniShizuku（用于 API < 24 上的 shell 模拟手势）
         io.github.cctyl.nokia.shizuku.MiniShizuku.init(this);
